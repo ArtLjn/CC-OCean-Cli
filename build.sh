@@ -25,7 +25,12 @@ EXTERNALS=(
   '@opentelemetry/exporter-trace-otlp-proto'
 )
 
-# 1. 打包 JS bundle
+# 1. 清理 bun 缓存和旧产物
+echo ">>> 清理缓存 ..."
+rm -f ocean.bundle.js
+rm -rf "$BIN_DIR/.ocean-bundle.js" "$BIN_DIR/.ocean-bun" "$BIN_DIR/.clmg-bundle.js" "$BIN_DIR/.clmg-bun"
+
+# 2. 打包 JS bundle
 echo ">>> 打包 bundle ..."
 ext_args=()
 for e in "${EXTERNALS[@]}"; do

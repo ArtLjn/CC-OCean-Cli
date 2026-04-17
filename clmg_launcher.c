@@ -16,7 +16,7 @@ int main(int argc, char *argv[]) {
 
     char *dir = dirname(exe_path);
     char bun_path[4096];
-    snprintf(bun_path, sizeof(bun_path), "%s/.clmg-bun", dir);
+    snprintf(bun_path, sizeof(bun_path), "%s/.ocean-bun", dir);
 
     // 如果启动器旁边没有 bun，回退到 PATH 中的 bun
     struct stat st;
@@ -29,7 +29,7 @@ int main(int argc, char *argv[]) {
 
     // 构建参数: bun run <bundle.js> <user args...>
     char bundle_path[4096];
-    snprintf(bundle_path, sizeof(bundle_path), "%s/.clmg-bundle.js", dir);
+    snprintf(bundle_path, sizeof(bundle_path), "%s/.ocean-bundle.js", dir);
 
     int total = argc + 3;
     char **exec_argv = malloc((total + 1) * sizeof(char *));

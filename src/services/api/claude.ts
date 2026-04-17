@@ -778,6 +778,7 @@ export async function* queryModelWithStreaming({
       yield* queryCustomAnthropicProvider(
         messages,
         systemPrompt,
+        thinkingConfig,
         tools,
         signal,
         options,
@@ -3572,6 +3573,7 @@ function stripCacheControl<T>(blocks: T[]): T[] {
 async function* queryCustomAnthropicProvider(
   messages: Message[],
   systemPrompt: SystemPrompt,
+  thinkingConfig: ThinkingConfig,
   tools: Tools,
   signal: AbortSignal,
   options: Options,
@@ -3594,11 +3596,6 @@ async function* queryCustomAnthropicProvider(
 
   // 动态导入 Anthropic SDK，避免影响原有路径
   const { default: Anthropic } = await import('@anthropic-ai/sdk')
-  const client = new Anthropic({
-    apiKey,
-    baseURL: config.baseUrl,
-    ...(config.headers ? { defaultHeaders: config.headers } : {}),
-  })
 
   // 规范化消息并转换成 API 格式（复用现有函数链）
   let messagesForAPI = normalizeMessagesForAPI(messages, tools)
@@ -3638,22 +3635,56 @@ async function* queryCustomAnthropicProvider(
   const cleanMessages = stripCacheControl(apiMessages)
   const cleanSystem = stripCacheControl(systemBlocks)
 
-  const maxOutputTokens = 16384
+  const maxOutputTokens =
+    options.maxOutputTokensOverride ?? getMaxOutputTokensForModel(options.model)
 
-  // 使用 beta 路径，与标准 queryModel 一致，确保第三方 API 兼容
-  const result = await client.beta.messages.create(
-    {
-      model: modelId,
-      messages: cleanMessages as MessageParam[],
-      system: cleanSystem as TextBlockParam[],
-      tools: allTools as BetaToolUnion[],
-      ...(options.toolChoice ? { tool_choice: options.toolChoice } : {}),
-      max_tokens: maxOutputTokens,
-      stream: true,
+  const generator = withRetry(
+    async () =>
+      new Anthropic({
+        apiKey,
+        baseURL: config.baseUrl,
+        ...(config.headers ? { defaultHeaders: config.headers } : {}),
+        ...(options.fetchOverride ? { fetch: options.fetchOverride } : {}),
+        maxRetries: 0,
+      }),
+    async (client, _attempt, context) => {
+      const requestMaxTokens =
+        context.maxTokensOverride ?? options.maxOutputTokensOverride ?? maxOutputTokens
+
+      const result = await client.beta.messages
+        .create(
+          {
+            model: modelId,
+            messages: cleanMessages as MessageParam[],
+            system: cleanSystem as TextBlockParam[],
+            tools: allTools as BetaToolUnion[],
+            ...(options.toolChoice ? { tool_choice: options.toolChoice } : {}),
+            max_tokens: requestMaxTokens,
+            stream: true,
+          },
+          { signal },
+        )
+        .withResponse()
+
+      return result.data
     },
-    { signal },
-  ).withResponse()
-  const stream = result.data
+    {
+      model: options.model,
+      fallbackModel: options.fallbackModel,
+      thinkingConfig,
+      signal,
+      querySource: options.querySource,
+    },
+  )
+
+  let e
+  do {
+    e = await generator.next()
+    if (!e.done) {
+      yield e.value
+    }
+  } while (!e.done)
+  const stream = e.value
 
   // 流式处理响应 — 与原版 queryModel 相同的 accumulation 逻辑
   let partialMessage: BetaMessage | undefined

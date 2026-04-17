@@ -17,6 +17,7 @@
   "scripts": {
     "dev": "bun run ./src/dev-entry.ts",
     "start": "bun run ./src/dev-entry.ts",
+    "build": "bash build.sh",
     "version": "bun run ./src/dev-entry.ts --version"
   },
   "dependencies": {

@@ -11,6 +11,7 @@ import { isAwsCredentialsProviderError } from 'src/utils/aws.js'
 import { logForDebugging } from 'src/utils/debug.js'
 import { logError } from 'src/utils/log.js'
 import { createSystemAPIErrorMessage } from 'src/utils/messages.js'
+import { isCustomProviderModel } from 'src/utils/model/customProviders.js'
 import { getAPIProviderForStatsig } from 'src/utils/model/providers.js'
 import {
   clearApiKeyHelperCache,
@@ -52,7 +53,9 @@ const abortError = () => new APIUserAbortError()
 const DEFAULT_MAX_RETRIES = 10
 const FLOOR_OUTPUT_TOKENS = 3000
 const MAX_529_RETRIES = 3
+const MAX_CUSTOM_PROVIDER_OVERLOAD_RETRIES = 3
 export const BASE_DELAY_MS = 500
+const CUSTOM_PROVIDER_BASE_DELAY_MS = 3000
 
 // Foreground query sources where the user IS blocking on the result — these
 // retry on 529. Everything else (summaries, titles, suggestions, classifiers)
@@ -103,9 +106,41 @@ function isPersistentRetryEnabled(): boolean {
     : false
 }
 
-function isTransientCapacityError(error: unknown): boolean {
+function isCustomProviderOverloadedError(
+  error: unknown,
+  model: string | undefined,
+): boolean {
+  if (!model || !isCustomProviderModel(model)) {
+    return false
+  }
+
+  const message = errorMessage(error)
+  if (
+    message.includes('"code":"1305"') ||
+    message.includes('"code": "1305"') ||
+    message.includes('该模型当前访问量过大')
+  ) {
+    return true
+  }
+
+  try {
+    const parsed = JSON.parse(message) as {
+      error?: { code?: string; message?: string }
+    }
+    return parsed.error?.code === '1305'
+  } catch {
+    return false
+  }
+}
+
+function isTransientCapacityError(
+  error: unknown,
+  model?: string,
+): boolean {
   return (
-    is529Error(error) || (error instanceof APIError && error.status === 429)
+    is529Error(error) ||
+    (error instanceof APIError && error.status === 429) ||
+    isCustomProviderOverloadedError(error, model)
   )
 }
 
@@ -184,6 +219,7 @@ export async function* withRetry<T>(
   }
   let client: Anthropic | null = null
   let consecutive529Errors = options.initialConsecutive529Errors ?? 0
+  let customProviderOverloadErrors = 0
   let lastError: unknown
   let persistentAttempt = 0
   for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
@@ -364,9 +400,22 @@ export async function* withRetry<T>(
         }
       }
 
+      // 自定义提供商过载（1305）：限制重试次数，避免长时间卡顿
+      if (isCustomProviderOverloadedError(error, options.model)) {
+        customProviderOverloadErrors++
+        if (customProviderOverloadErrors >= MAX_CUSTOM_PROVIDER_OVERLOAD_RETRIES) {
+          logEvent('tengu_api_custom_provider_overloaded_giveup', {
+            model: options.model as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+            provider: getAPIProviderForStatsig(),
+          })
+          throw new CannotRetryError(error, retryContext)
+        }
+      }
+
       // Only retry if the error indicates we should
       const persistent =
-        isPersistentRetryEnabled() && isTransientCapacityError(error)
+        isPersistentRetryEnabled() &&
+        isTransientCapacityError(error, options.model)
       if (attempt > maxRetries && !persistent) {
         throw new CannotRetryError(error, retryContext)
       }
@@ -374,9 +423,14 @@ export async function* withRetry<T>(
       // AWS/GCP errors aren't always APIError, but can be retried
       const handledCloudAuthError =
         handleAwsCredentialError(error) || handleGcpCredentialError(error)
+      const handledCustomProviderCapacityError = isCustomProviderOverloadedError(
+        error,
+        options.model,
+      )
       if (
         !handledCloudAuthError &&
-        (!(error instanceof APIError) || !shouldRetry(error))
+        !handledCustomProviderCapacityError &&
+        (!(error instanceof APIError) || !shouldRetry(error, options.model))
       ) {
         throw new CannotRetryError(error, retryContext)
       }
@@ -459,7 +513,10 @@ export async function* withRetry<T>(
           PERSISTENT_RESET_CAP_MS,
         )
       } else {
-        delayMs = getRetryDelay(attempt, retryAfter)
+        // 自定义提供商过载使用更长的退避时间
+        delayMs = handledCustomProviderCapacityError
+          ? getRetryDelay(attempt, retryAfter, 16000, CUSTOM_PROVIDER_BASE_DELAY_MS)
+          : getRetryDelay(attempt, retryAfter)
       }
 
       // In persistent mode the for-loop `attempt` is clamped at maxRetries+1;
@@ -531,6 +588,7 @@ export function getRetryDelay(
   attempt: number,
   retryAfterHeader?: string | null,
   maxDelayMs = 32000,
+  baseDelayMs = BASE_DELAY_MS,
 ): number {
   if (retryAfterHeader) {
     const seconds = parseInt(retryAfterHeader, 10)
@@ -540,7 +598,7 @@ export function getRetryDelay(
   }
 
   const baseDelay = Math.min(
-    BASE_DELAY_MS * Math.pow(2, attempt - 1),
+    baseDelayMs * Math.pow(2, attempt - 1),
     maxDelayMs,
   )
   const jitter = Math.random() * 0.25 * baseDelay
@@ -693,7 +751,7 @@ function handleGcpCredentialError(error: unknown): boolean {
   return false
 }
 
-function shouldRetry(error: APIError): boolean {
+function shouldRetry(error: APIError, model?: string): boolean {
   // Never retry mock errors - they're from /mock-limits command for testing
   if (isMockRateLimitError(error)) {
     return false
@@ -701,7 +759,11 @@ function shouldRetry(error: APIError): boolean {
 
   // Persistent mode: 429/529 always retryable, bypass subscriber gates and
   // x-should-retry header.
-  if (isPersistentRetryEnabled() && isTransientCapacityError(error)) {
+  if (isPersistentRetryEnabled() && isTransientCapacityError(error, model)) {
+    return true
+  }
+
+  if (isCustomProviderOverloadedError(error, model)) {
     return true
   }
 
