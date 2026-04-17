@@ -135,6 +135,30 @@ bun install
 
 记忆按项目隔离存储在 `.claude/memory/` 下，新会话自动注入摘要列表，按需加载全文。
 
+### 多模型协作
+配置多个 AI 模型按角色分工协作处理任务，支持自定义 Provider（智谱GLM、火山云等）。
+
+```bash
+# 查看可用模型
+/agent-config models
+
+# 查看内置角色预设
+/agent-config presets
+
+# 用预设快速创建 agent
+/agent-config preset architect --model glm:glm-5.1
+/agent-config preset reviewer --model vk:doubao-seed-2.0-pro
+/agent-config preset implementer --model glm:glm-5-turbo
+
+# 查看已配置的 agent
+/agent-config list
+
+# 多模型协作（真实并行调用）
+/multi-agent 帮我设计一个高并发缓存系统
+```
+
+配置默认保存到 `~/.claude/agents.json`（全局通用），加 `--local` 可保存到当前项目。支持 5 个内置角色预设：架构师、审查员、实现者、测试专家、DevOps 工程师。
+
 ## 🛠 开发指南
 
 ### 项目结构
@@ -177,6 +201,8 @@ bun test
 - ✅ 支持第三方自定义模型API兼容性增强
 - ✅ 增强commit命令功能，自动生成规范提交信息
 - ✅ 新增 `/mem` 轻量级项目记忆命令，支持压缩总结和工作交接
+- ✅ 新增 `/multi-agent` 多模型协作命令，支持自定义 Provider 按角色分工并行处理任务
+- ✅ 新增 `/agent-config` 协作 Agent 配置管理，全局/项目级配置合并
 - ✅ 实现自定义提供商过载重试机制
 - ✅ 优化重试逻辑和错误提示
 - ✅ 移除不必要的重试次数限制，提升可用性
