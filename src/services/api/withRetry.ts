@@ -51,6 +51,7 @@ import { extractConnectionErrorDetails } from './errorUtils.js'
 const abortError = () => new APIUserAbortError()
 
 const DEFAULT_MAX_RETRIES = 10
+const CUSTOM_PROVIDER_MAX_RETRIES = 20
 const FLOOR_OUTPUT_TOKENS = 3000
 const MAX_529_RETRIES = 3
 const MAX_CUSTOM_PROVIDER_OVERLOAD_RETRIES = 3
@@ -855,7 +856,16 @@ export function getDefaultMaxRetries(): number {
   return DEFAULT_MAX_RETRIES
 }
 function getMaxRetries(options: RetryOptions): number {
-  return options.maxRetries ?? getDefaultMaxRetries()
+  if (options.maxRetries !== undefined) {
+    return options.maxRetries
+  }
+  if (process.env.CLAUDE_CODE_MAX_RETRIES) {
+    return parseInt(process.env.CLAUDE_CODE_MAX_RETRIES, 10)
+  }
+  if (isCustomProviderModel(options.model)) {
+    return CUSTOM_PROVIDER_MAX_RETRIES
+  }
+  return DEFAULT_MAX_RETRIES
 }
 
 const DEFAULT_FAST_MODE_FALLBACK_HOLD_MS = 30 * 60 * 1000 // 30 minutes
