@@ -26,7 +26,7 @@ type ProvidersMap = Record<string, CustomProviderConfig>
 
 const CLMG_DIR = join(homedir(), '.claude')
 const PROVIDERS_PATH = join(CLMG_DIR, 'custom-providers.json')
-const CLMG_MODEL_PATH = join(CLMG_DIR, 'clmg.json')
+const CLMG_MODEL_PATH = join(CLMG_DIR, 'ocean.json')
 
 // ── Provider 配置读取 ──────────────────────────────────
 
