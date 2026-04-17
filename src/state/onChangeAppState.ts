@@ -19,6 +19,7 @@ import {
 } from '../utils/sessionState.js'
 import { updateSettingsForSource } from '../utils/settings/settings.js'
 import { isCustomProviderModel, saveClmgModel } from '../utils/model/customProviders.js'
+import { clearAllSessions } from '../services/api/sessionIngress.js'
 import type { AppState } from './AppStateStore.js'
 
 // Inverse of the push below — restore on worker restart.
@@ -107,6 +108,20 @@ export function onChangeAppState({
     newState.mainLoopModel !== oldState.mainLoopModel &&
     newState.mainLoopModel !== null
   ) {
+    // 切换模型时清理可能的污染状态 - 防止偶发的 InvalidEncryptedContent 错误
+    try {
+      // 1. 清理API密钥缓存
+      clearApiKeyHelperCache()
+      // 2. 清理AWS凭证缓存
+      clearAwsCredentialsCache()
+      // 3. 清理GCP凭证缓存
+      clearGcpCredentialsCache()
+      // 4. 清理会话全局状态（lastUuidMap, sequentialAppendBySession）
+      clearAllSessions()
+    } catch (error) {
+      logError(toError(error))
+    }
+
     if (isCustomProviderModel(newState.mainLoopModel)) {
       // 自定义 provider 模型存到 clmg.json，不污染 settings.json
       saveClmgModel(newState.mainLoopModel)
