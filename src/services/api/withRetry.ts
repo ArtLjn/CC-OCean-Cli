@@ -54,7 +54,6 @@ const DEFAULT_MAX_RETRIES = 10
 const CUSTOM_PROVIDER_MAX_RETRIES = 20
 const FLOOR_OUTPUT_TOKENS = 3000
 const MAX_529_RETRIES = 3
-const MAX_CUSTOM_PROVIDER_OVERLOAD_RETRIES = 3
 export const BASE_DELAY_MS = 500
 const CUSTOM_PROVIDER_BASE_DELAY_MS = 3000
 
@@ -220,7 +219,6 @@ export async function* withRetry<T>(
   }
   let client: Anthropic | null = null
   let consecutive529Errors = options.initialConsecutive529Errors ?? 0
-  let customProviderOverloadErrors = 0
   let lastError: unknown
   let persistentAttempt = 0
   for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
@@ -398,18 +396,6 @@ export async function* withRetry<T>(
               retryContext,
             )
           }
-        }
-      }
-
-      // 自定义提供商过载（1305）：限制重试次数，避免长时间卡顿
-      if (isCustomProviderOverloadedError(error, options.model)) {
-        customProviderOverloadErrors++
-        if (customProviderOverloadErrors >= MAX_CUSTOM_PROVIDER_OVERLOAD_RETRIES) {
-          logEvent('tengu_api_custom_provider_overloaded_giveup', {
-            model: options.model as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
-            provider: getAPIProviderForStatsig(),
-          })
-          throw new CannotRetryError(error, retryContext)
         }
       }
 
