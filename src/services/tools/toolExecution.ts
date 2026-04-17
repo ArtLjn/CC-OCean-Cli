@@ -628,6 +628,22 @@ async function checkPermissionsAndCallTool(
   const parsedInput = tool.inputSchema.safeParse(normalizedInput)
   if (!parsedInput.success) {
     let errorContent = formatZodValidationError(tool.name, parsedInput.error)
+    // DEBUG: 写日志到文件
+    try {
+      const fs = require('node:fs')
+      const os = require('node:os')
+      const path = require('node:path')
+      const logPath = path.join(os.homedir(), '.claude', 'clmg-debug.log')
+      fs.appendFileSync(logPath, [
+        `[${new Date().toISOString()}] TOOL_FAIL tool=${tool.name}`,
+        `  input_type=${typeof input}`,
+        `  input=${JSON.stringify(input).slice(0, 500)}`,
+        `  normalized_type=${typeof normalizedInput}`,
+        `  normalized=${JSON.stringify(normalizedInput).slice(0, 500)}`,
+        `  error=${errorContent.slice(0, 300)}`,
+        '',
+      ].join('\n'), 'utf-8')
+    } catch (_e) { /* ignore */ }
 
     const schemaHint = buildSchemaNotSentHint(
       tool,

@@ -3468,6 +3468,21 @@ function cleanJsonSchemaForThirdParty(
   return cleaned
 }
 
+function cleanToolSchemaForThirdParty(toolSchema: BetaToolUnion): BetaToolUnion {
+  if (!('input_schema' in toolSchema)) {
+    return toolSchema
+  }
+
+  return {
+    type: 'custom',
+    name: toolSchema.name,
+    description: toolSchema.description,
+    input_schema: cleanJsonSchemaForThirdParty(
+      toolSchema.input_schema as Record<string, unknown>,
+    ),
+  } as BetaToolUnion
+}
+
 /** 从 system blocks / messages 中移除 cache_control 字段 */
 function stripCacheControl<T>(blocks: T[]): T[] {
   return blocks.map(block => {
@@ -3508,7 +3523,11 @@ async function* queryCustomAnthropicProvider(
 
   // 动态导入 Anthropic SDK，避免影响原有路径
   const { default: Anthropic } = await import('@anthropic-ai/sdk')
-  const client = new Anthropic({ apiKey, baseURL: config.baseUrl })
+  const client = new Anthropic({
+    apiKey,
+    baseURL: config.baseUrl,
+    ...(config.headers ? { defaultHeaders: config.headers } : {}),
+  })
 
   // 规范化消息并转换成 API 格式（复用现有函数链）
   const messagesForAPI = normalizeMessagesForAPI(messages, tools)
@@ -3517,19 +3536,19 @@ async function* queryCustomAnthropicProvider(
   // 构建系统提示词（不启用 cache）
   const systemBlocks = buildSystemPromptBlocks(systemPrompt, false)
 
-  // 构建工具列表并清理 schema
-  const allTools: BetaToolUnion[] = []
-  for (const tool of tools) {
-    const schema = tool.inputSchema
-    const cleanedSchema = cleanJsonSchemaForThirdParty(
-      (schema as unknown) as Record<string, unknown>,
-    )
-    allTools.push({
-      name: tool.name,
-      description: tool.description,
-      input_schema: cleanedSchema as Record<string, unknown>,
-    } as BetaToolUnion)
-  }
+  // 复用主查询路径的 tool schema 构造，避免把 Zod schema / 函数引用直接发给兼容 API。
+  const toolSchemas = await Promise.all(
+    tools.map(tool =>
+      toolToAPISchema(tool, {
+        getToolPermissionContext: options.getToolPermissionContext,
+        tools,
+        agents: options.agents,
+        allowedAgentTypes: options.allowedAgentTypes,
+        model: options.model,
+      }),
+    ),
+  )
+  const allTools = toolSchemas.map(cleanToolSchemaForThirdParty)
 
   // 清理 cache_control
   const cleanMessages = stripCacheControl(apiMessages)
@@ -3537,18 +3556,20 @@ async function* queryCustomAnthropicProvider(
 
   const maxOutputTokens = 16384
 
-  // 使用非 beta 路径，避免发送 betas/thinking 等特有字段
-  const stream = await client.messages.create(
+  // 使用 beta 路径，与标准 queryModel 一致，确保第三方 API 兼容
+  const result = await client.beta.messages.create(
     {
       model: modelId,
       messages: cleanMessages as MessageParam[],
       system: cleanSystem as TextBlockParam[],
-      tools: allTools as never[],
+      tools: allTools as BetaToolUnion[],
+      ...(options.toolChoice ? { tool_choice: options.toolChoice } : {}),
       max_tokens: maxOutputTokens,
       stream: true,
     },
     { signal },
-  )
+  ).withResponse()
+  const stream = result.data
 
   // 流式处理响应 — 与原版 queryModel 相同的 accumulation 逻辑
   let partialMessage: BetaMessage | undefined
@@ -3567,6 +3588,14 @@ async function* queryCustomAnthropicProvider(
           break
 
         case 'content_block_start':
+          // DEBUG: 记录第三方 API 返回的 content_block_start
+          try {
+            const fs = require('node:fs')
+            const path = require('node:path')
+            const logPath = path.join(require('node:os').homedir(), '.claude', 'clmg-debug.log')
+            fs.appendFileSync(logPath,
+              `[${new Date().toISOString()}] content_block_start: ${JSON.stringify(part.content_block).slice(0, 500)}\n`, 'utf-8')
+          } catch (_e) { /* ignore */ }
           switch (part.content_block.type) {
             case 'tool_use':
               contentBlocks[part.index] = {
@@ -3606,6 +3635,17 @@ async function* queryCustomAnthropicProvider(
 
         case 'content_block_stop': {
           const contentBlock = contentBlocks[part.index]
+          // DEBUG: 记录 content_block_stop 时的累积状态
+          try {
+            const fs = require('node:fs')
+            const path = require('node:path')
+            const logPath = path.join(require('node:os').homedir(), '.claude', 'clmg-debug.log')
+            const blockInfo = contentBlock
+              ? { type: contentBlock.type, ...(contentBlock.type === 'tool_use' ? { name: (contentBlock as {name: string}).name, input: String((contentBlock as {input: unknown}).input).slice(0, 500) } : {}) }
+              : null
+            fs.appendFileSync(logPath,
+              `[${new Date().toISOString()}] content_block_stop: ${JSON.stringify(blockInfo)}\n`, 'utf-8')
+          } catch (_e) { /* ignore */ }
           if (!contentBlock || !partialMessage) break
           const m: AssistantMessage = {
             message: {
