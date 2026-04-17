@@ -76,7 +76,7 @@ export function getAttributionTexts(): AttributionTexts {
     isInternalModelRepoCached() || isKnownPublicModel
       ? getPublicModelName(model)
       : 'Claude Opus 4.6'
-  const defaultAttribution = `🤖 Generated with [Claude Code](${PRODUCT_URL})`
+  const defaultAttribution = `🤖 Generated with [Ocean CLI](${PRODUCT_URL})`
   const defaultCommit = `Co-Authored-By: ${modelName} <noreply@anthropic.com>`
 
   const settings = getInitialSettings()
@@ -325,7 +325,7 @@ export async function getEnhancedPRAttribution(
     return ''
   }
 
-  const defaultAttribution = `🤖 Generated with [Claude Code](${PRODUCT_URL})`
+  const defaultAttribution = `🤖 Generated with [Ocean CLI](${PRODUCT_URL})`
 
   // Get AppState first
   const appState = getAppState()

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# clmg 构建脚本 - 代码更新后运行此脚本重新打包
+# ocean 构建脚本 - 代码更新后运行此脚本重新打包
 set -euo pipefail
 cd "$(dirname "$0")"
 export PATH="$HOME/.bun/bin:$PATH"
@@ -31,22 +31,22 @@ ext_args=()
 for e in "${EXTERNALS[@]}"; do
   ext_args+=(--external "$e")
 done
-bun build --target=bun --outfile=clmg.bundle.js ./src/dev-entry.ts "${ext_args[@]}"
+bun build --target=bun --outfile=ocean.bundle.js ./src/dev-entry.ts "${ext_args[@]}"
 
 # 2. 编译 C 启动器
 echo ">>> 编译启动器 ..."
-cc -O2 -o "$BIN_DIR/clmg" clmg_launcher.c
-codesign --force --sign - "$BIN_DIR/clmg"
+cc -O2 -o "$BIN_DIR/ocean" clmg_launcher.c
+codesign --force --sign - "$BIN_DIR/ocean"
 
 # 3. 部署 bundle 和 bun runtime
 echo ">>> 部署 ..."
-cp clmg.bundle.js "$BIN_DIR/.clmg-bundle.js"
-cp "$HOME/.bun/bin/bun" "$BIN_DIR/.clmg-bun"
+cp ocean.bundle.js "$BIN_DIR/.ocean-bundle.js"
+cp "$HOME/.bun/bin/bun" "$BIN_DIR/.ocean-bun"
 
 # 4. 清除 macOS 隔离属性并重新签名
 echo ">>> 签名 ..."
-xattr -cr "$BIN_DIR/clmg" "$BIN_DIR/.clmg-bun" "$BIN_DIR/.clmg-bundle.js"
-codesign --force --sign - "$BIN_DIR/clmg"
-codesign --force --sign - "$BIN_DIR/.clmg-bun"
+xattr -cr "$BIN_DIR/ocean" "$BIN_DIR/.ocean-bun" "$BIN_DIR/.ocean-bundle.js"
+codesign --force --sign - "$BIN_DIR/ocean"
+codesign --force --sign - "$BIN_DIR/.ocean-bun"
 
-echo ">>> 完成: $BIN_DIR/clmg"
+echo ">>> 完成: $BIN_DIR/ocean"
