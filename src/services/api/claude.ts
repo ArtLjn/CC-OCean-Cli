@@ -3310,7 +3310,7 @@ export async function queryHaiku({
 type QueryWithModelOptions = Omit<Options, 'getToolPermissionContext'>
 
 /**
- * Query a specific model through the Claude Code infrastructure.
+ * Query a specific model through the OCean Cli infrastructure.
  * This goes through the full query pipeline including proper authentication,
  * betas, and headers - unlike direct API calls.
  */
@@ -3483,6 +3483,77 @@ function cleanToolSchemaForThirdParty(toolSchema: BetaToolUnion): BetaToolUnion 
   } as BetaToolUnion
 }
 
+const THIRD_PARTY_UNSUPPORTED_ASSISTANT_BLOCK_TYPES = new Set([
+  'server_tool_use',
+  'web_search_tool_result',
+  'code_execution_tool_result',
+  'mcp_tool_use',
+  'mcp_tool_result',
+  'container_upload',
+  'web_fetch_tool_result',
+  'bash_code_execution_tool_result',
+  'text_editor_code_execution_tool_result',
+  'tool_search_tool_result',
+  'compaction',
+])
+
+function stripUnsupportedThirdPartyBlocks(
+  messages: (UserMessage | AssistantMessage)[],
+): (UserMessage | AssistantMessage)[] {
+  let changed = false
+
+  const result = messages.map(msg => {
+    if (msg.type !== 'assistant') {
+      return msg
+    }
+
+    const content = msg.message.content
+    const filtered = content.filter(block => {
+      if (THIRD_PARTY_UNSUPPORTED_ASSISTANT_BLOCK_TYPES.has(block.type)) {
+        changed = true
+        return false
+      }
+      return true
+    })
+
+    if (filtered.length === content.length) {
+      return msg
+    }
+
+    if (
+      filtered.length === 0 ||
+      filtered.every(
+        block =>
+          block.type === 'thinking' ||
+          block.type === 'redacted_thinking' ||
+          (block.type === 'text' && (!block.text || !block.text.trim())),
+      )
+    ) {
+      filtered.push({
+        type: 'text' as const,
+        text: '[Filtered unsupported third-party content]',
+        citations: [],
+      })
+    }
+
+    return {
+      ...msg,
+      message: {
+        ...msg.message,
+        content: filtered,
+      },
+    }
+  })
+
+  if (changed) {
+    logForDebugging(
+      '[third-party] stripped unsupported assistant content blocks before API request',
+    )
+  }
+
+  return changed ? result : messages
+}
+
 /** 从 system blocks / messages 中移除 cache_control 字段 */
 function stripCacheControl<T>(blocks: T[]): T[] {
   return blocks.map(block => {
@@ -3530,7 +3601,20 @@ async function* queryCustomAnthropicProvider(
   })
 
   // 规范化消息并转换成 API 格式（复用现有函数链）
-  const messagesForAPI = normalizeMessagesForAPI(messages, tools)
+  let messagesForAPI = normalizeMessagesForAPI(messages, tools)
+  messagesForAPI = messagesForAPI.map(msg => {
+    switch (msg.type) {
+      case 'user':
+        return stripToolReferenceBlocksFromUserMessage(msg)
+      case 'assistant':
+        return stripCallerFieldFromAssistantMessage(msg)
+      default:
+        return msg
+    }
+  })
+  messagesForAPI = ensureToolResultPairing(messagesForAPI)
+  messagesForAPI = stripAdvisorBlocks(messagesForAPI)
+  messagesForAPI = stripUnsupportedThirdPartyBlocks(messagesForAPI)
   const apiMessages = addCacheBreakpoints(messagesForAPI, false)
 
   // 构建系统提示词（不启用 cache）

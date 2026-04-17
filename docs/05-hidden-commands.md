@@ -2,7 +2,7 @@
 
 > 源码位置：`src/commands.ts`、`src/commands/`、`src/main.tsx`
 
-Claude Code 中有大量未公开的斜杠命令、CLI 参数和环境变量。
+OCean Cli 中有大量未公开的斜杠命令、CLI 参数和环境变量。
 
 ---
 
@@ -25,7 +25,7 @@ Claude Code 中有大量未公开的斜杠命令、CLI 参数和环境变量。
 | `/torch` | `TORCH` | Torch 功能 |
 | `/force-snip` | `HISTORY_SNIP` | 强制历史截断 |
 | `/remoteControlServer` | `DAEMON` + `BRIDGE_MODE` | 远程控制服务器 |
-| `/web` / `/remote-setup` | `CCR_REMOTE_SETUP` | Claude Code on the Web 设置 |
+| `/web` / `/remote-setup` | `CCR_REMOTE_SETUP` | OCean Cli on the Web 设置 |
 
 ---
 

@@ -47,7 +47,7 @@ How to use the statusLine command:
        "project_dir": "string",  // Project root directory path
        "added_dirs": ["string"]  // Directories added via /add-dir
      },
-     "version": "string",        // Claude Code app version (e.g., "1.0.71")
+     "version": "string",        // OCean Cli app version (e.g., "1.0.71")
      "output_style": {
        "name": "string",         // Output style name (e.g., "default", "Explanatory", "Learning")
      },
@@ -134,7 +134,7 @@ Guidelines:
 export const STATUSLINE_SETUP_AGENT: BuiltInAgentDefinition = {
   agentType: 'statusline-setup',
   whenToUse:
-    "Use this agent to configure the user's Claude Code status line setting.",
+    "Use this agent to configure the user's OCean Cli status line setting.",
   tools: ['Read', 'Edit'],
   source: 'built-in',
   baseDir: 'built-in',
