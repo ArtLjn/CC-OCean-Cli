@@ -34,7 +34,8 @@ import { getFeatureValue_CACHED_MAY_BE_STALE } from '../analytics/growthbook.js'
  * don't apply until restart.
  */
 export function isChannelPermissionRelayEnabled(): boolean {
-  return getFeatureValue_CACHED_MAY_BE_STALE('tengu_harbor_permissions', false)
+  // Ocean CLI: 始终启用权限中继，不依赖 GrowthBook 远程配置
+  return true
 }
 
 export type ChannelPermissionResponse = {

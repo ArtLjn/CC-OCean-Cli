@@ -138,7 +138,7 @@ export const AskUserQuestionTool: Tool<InputSchema, Output> = buildTool({
     // the keyboard. Channel permission relay already skips
     // requiresUserInteraction() tools (interactiveHandler.ts) so there's
     // no alternate approval path.
-    if ((feature('KAIROS') || feature('KAIROS_CHANNELS')) && getAllowedChannels().length > 0) {
+    if (true && getAllowedChannels().length > 0) { // Ocean CLI: Channel 始终启用
       return false;
     }
     return true;

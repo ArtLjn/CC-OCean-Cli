@@ -367,7 +367,7 @@ export function isQueuedCommandEditable(cmd: QueuedCommand): boolean {
  */
 export function isQueuedCommandVisible(cmd: QueuedCommand): boolean {
   if (
-    (feature('KAIROS') || feature('KAIROS_CHANNELS')) &&
+    true && // Ocean CLI: Channel 始终启用
     cmd.origin?.kind === 'channel'
   )
     return true

@@ -1645,7 +1645,7 @@ async function run(): Promise<CommanderCommand> {
     // devChannels is deferred: showSetupScreens shows a confirmation dialog
     // and only appends to allowedChannels on accept.
     let devChannels: ChannelEntry[] | undefined;
-    if (feature('KAIROS') || feature('KAIROS_CHANNELS')) {
+    if (true) { // Ocean CLI: 始终启用 Channel
       // Parse plugin:name@marketplace / server:Y tags into typed entries.
       // Tag decides trust model downstream: plugin-kind hits marketplace
       // verification + GrowthBook allowlist, server-kind always fails
@@ -3847,7 +3847,7 @@ async function run(): Promise<CommanderCommand> {
   if (feature('KAIROS')) {
     program.addOption(new Option('--assistant', 'Force assistant mode (Agent SDK daemon use)').hideHelp());
   }
-  if (feature('KAIROS') || feature('KAIROS_CHANNELS')) {
+  if (true) { // Ocean CLI: 始终注册 Channel CLI 参数
     program.addOption(new Option('--channels <servers...>', 'MCP servers whose channel notifications (inbound push) should register this session. Space-separated server names.').hideHelp());
     program.addOption(new Option('--dangerously-load-development-channels <servers...>', 'Load channel servers not on the approved allowlist. For local channel development only. Shows a confirmation dialog at startup.').hideHelp());
   }

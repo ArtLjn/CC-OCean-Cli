@@ -24,6 +24,23 @@
 - **AutoDream 整合**：每 24h + 5 个会话后自动去重、修剪、整合记忆，保持知识库精简准确
 - **智能检索**：自动从记忆库中选择与当前查询相关的记忆注入上下文，附带新鲜度提醒
 
+### 📡 Channel 系统（IM 集成）
+- 通过 MCP 协议接入 IM 平台（钉钉、Telegram、飞书、Discord 等），远程控制 Agent
+- 支持入站消息推送（用户通过 IM 发消息 → Agent 接收并执行）
+- 支持 Agent 主动回复（Agent 调用 MCP 工具 → 消息发送到 IM）
+- 权限中继：工具审批提示可转发到 IM，用户远程回复 "yes/no" 完成审批
+- 六层安全门控：能力声明 → 运行时开关 → 认证 → 组织策略 → 会话白名单 → 插件白名单
+
+```bash
+# 启动时指定 Channel MCP 服务器
+ocean --channels server:dingtalk-bot
+
+# 开发模式（跳过白名单检查）
+ocean --dangerously-load-development-channels server:dingtalk-bot
+```
+
+> 钉钉等 IM 平台通过插件接入，需安装对应的 Channel MCP Server。已有现成的钉钉 MCP Server（[open-dingtalk/dingtalk-mcp](https://github.com/open-dingtalk/dingtalk-mcp)），后续将扩展为 Channel 模式支持双向实时通信。
+
 ### 🔧 增强开发功能
 - **智能Commit命令**：自动检测代码变更，生成符合Conventional Commits规范的提交信息
 - **多Agent协作**：内置多种专业Agent，处理复杂任务、代码审查、架构设计等场景
@@ -224,6 +241,8 @@ bun test
 - ✅ 移除不必要的重试次数限制，提升可用性
 
 ### v1.1.0
+- ✅ 启用 Channel IM 集成系统，支持通过钉钉/Telegram 等平台远程控制 Agent
+- ✅ 解除所有 Channel 门控（feature flag、GrowthBook 远程配置、OAuth、白名单），本地工具完全可用
 - ✅ 启用内置自动记忆提取（extractMemories），对话后后台自动保存记忆
 - ✅ 启用 AutoDream 记忆整合，定期去重修剪保持知识库精简
 - ✅ 修复 Bun 1.3.12 下 `@` 文件匹配失效问题（execa signal 兼容性）

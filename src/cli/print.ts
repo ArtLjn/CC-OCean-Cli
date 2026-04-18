@@ -1668,7 +1668,7 @@ function runHeadlessStreaming(
       // handler re-runs the full gate); just avoids dead buttons.
       let capabilities: { experimental?: Record<string, unknown> } | undefined
       if (
-        (feature('KAIROS') || feature('KAIROS_CHANNELS')) &&
+        true && // Ocean CLI: Channel 始终启用
         connection.type === 'connected' &&
         connection.capabilities.experimental
       ) {
@@ -4669,9 +4669,7 @@ function handleChannelEnable(
       response: { subtype: 'error', request_id: requestId, error },
     })
 
-  if (!(feature('KAIROS') || feature('KAIROS_CHANNELS'))) {
-    return respondError('channels feature not available in this build')
-  }
+  // Ocean CLI: Channel 始终启用，移除 feature flag 检查
 
   // Only a 'connected' client has .capabilities and .client to register the
   // handler on. The pool spread at the call site matches mcp_status.
@@ -4784,7 +4782,7 @@ function handleChannelEnable(
 function reregisterChannelHandlerAfterReconnect(
   connection: MCPServerConnection,
 ): void {
-  if (!(feature('KAIROS') || feature('KAIROS_CHANNELS'))) return
+  // Ocean CLI: Channel 始终启用，移除 feature flag 检查
   if (connection.type !== 'connected') return
 
   const gate = gateChannelServer(

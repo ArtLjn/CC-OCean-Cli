@@ -314,7 +314,7 @@ function handleInteractivePermission(
   // the subscription never fires and another racer wins. Graceful degradation
   // — the local dialog is always there as the floor.
   if (
-    (feature('KAIROS') || feature('KAIROS_CHANNELS')) &&
+    true && // Ocean CLI: Channel 始终启用
     channelCallbacks &&
     !ctx.tool.requiresUserInteraction?.()
   ) {

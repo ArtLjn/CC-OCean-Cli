@@ -4666,7 +4666,7 @@ export function shouldShowUserMessage(
     // should see what arrived. The <channel> tag in UserTextMessage handles
     // the actual rendering.
     if (
-      (feature('KAIROS') || feature('KAIROS_CHANNELS')) &&
+      true && // Ocean CLI: Channel 始终启用
       message.origin?.kind === 'channel'
     )
       return true
