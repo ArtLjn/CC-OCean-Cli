@@ -1392,11 +1392,16 @@ async function run(): Promise<CommanderCommand> {
       const addendum = getTeammatePromptAddendum().TEAMMATE_SYSTEM_PROMPT_ADDENDUM;
       appendSystemPrompt = appendSystemPrompt ? `${appendSystemPrompt}\n\n${addendum}` : addendum;
     }
+    // Ocean CLI: --enable-auto-mode 等同于 --permission-mode auto
+    const effectivePermissionModeCli = (options as { enableAutoMode?: boolean }).enableAutoMode
+      ? 'auto'
+      : permissionModeCli;
+
     const {
       mode: permissionMode,
       notification: permissionModeNotification
     } = initialPermissionModeFromCLI({
-      permissionModeCli,
+      permissionModeCli: effectivePermissionModeCli,
       dangerouslySkipPermissions
     });
 

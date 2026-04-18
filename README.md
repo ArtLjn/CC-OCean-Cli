@@ -13,6 +13,30 @@
 ![多模型切换界面](./static/img.png)
 *一键切换10+不同提供商的AI模型，支持价格展示和上下文长度说明*
 
+### ⚡ Auto Mode（自动模式）
+- **`--permission-mode auto`** 或 **`--enable-auto-mode`**：启用 AI 分类器自动审批
+- 安全操作（读文件、grep 等）自动批准，无需手动确认
+- 危险操作（删除文件、执行 bash 命令等）仍需用户确认
+- 支持所有模型提供商，不限制 Anthropic 官方模型
+- 可在 `settings.json` 中设置默认模式：`"permissions": { "defaultMode": "auto" }`
+
+```bash
+# 命令行启用
+ocean --permission-mode auto
+
+# 或使用等效参数
+ocean --enable-auto-mode
+
+# 配置文件永久启用（~/.claude/settings.json）
+{
+  "permissions": {
+    "defaultMode": "auto"
+  }
+}
+```
+
+> Ocean CLI 已解除原版 Claude Code 中 Auto Mode 的 TRANSCRIPT_CLASSIFIER feature gate 限制，所有模型和提供商均可使用。
+
 ### 🎨 海洋深蓝主题
 - 全新设计的海洋深蓝UI主题，视觉舒适
 - 优化的终端显示效果，支持代码高亮和格式化
