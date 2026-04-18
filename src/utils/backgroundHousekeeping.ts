@@ -4,9 +4,7 @@ import { initMagicDocs } from '../services/MagicDocs/magicDocs.js'
 import { initSkillImprovement } from './hooks/skillImprovement.js'
 
 /* eslint-disable @typescript-eslint/no-require-imports */
-const extractMemoriesModule = feature('EXTRACT_MEMORIES')
-  ? (require('../services/extractMemories/extractMemories.js') as typeof import('../services/extractMemories/extractMemories.js'))
-  : null
+const extractMemoriesModule = (require('../services/extractMemories/extractMemories.js') as typeof import('../services/extractMemories/extractMemories.js'))
 const registerProtocolModule = feature('LODESTONE')
   ? (require('./deepLink/registerProtocol.js') as typeof import('./deepLink/registerProtocol.js'))
   : null
@@ -31,9 +29,7 @@ const DELAY_VERY_SLOW_OPERATIONS_THAT_HAPPEN_EVERY_SESSION = 10 * 60 * 1000
 export function startBackgroundHousekeeping(): void {
   void initMagicDocs()
   void initSkillImprovement()
-  if (feature('EXTRACT_MEMORIES')) {
-    extractMemoriesModule!.initExtractMemories()
-  }
+  extractMemoriesModule.initExtractMemories()
   initAutoDream()
   void autoUpdateMarketplacesAndPluginsInBackground()
   if (feature('LODESTONE') && getIsInteractive()) {

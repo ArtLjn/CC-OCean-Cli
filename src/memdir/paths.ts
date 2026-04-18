@@ -67,13 +67,8 @@ export function isAutoMemoryEnabled(): boolean {
  * directly in an `if` condition.
  */
 export function isExtractModeActive(): boolean {
-  if (!getFeatureValue_CACHED_MAY_BE_STALE('tengu_passport_quail', false)) {
-    return false
-  }
-  return (
-    !getIsNonInteractiveSession() ||
-    getFeatureValue_CACHED_MAY_BE_STALE('tengu_slate_thimble', false)
-  )
+  // Ocean CLI: 始终启用自动记忆提取，不依赖 GrowthBook 远程配置
+  return true
 }
 
 /**
