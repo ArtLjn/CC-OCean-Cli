@@ -84,10 +84,36 @@ export function readChunk(id: string): string | null {
   return readFileSafe(getChunkPath(id))
 }
 
-export function getNextId(index: MemIndex): string {
+export function getNextId(index: MemIndex, title?: string): string {
+  // 从标题生成 slug 前缀，否则默认 mem
+  const prefix = title
+    ? title
+        .toLowerCase()
+        .replace(/[^\w\s-]/g, '')
+        .trim()
+        .replace(/\s+/g, '-')
+        .slice(0, 20) || 'mem'
+    : 'mem'
+
+  // 找同前缀最大序号
   const maxSeq = index.entries.reduce((max, e) => {
-    const match = e.id.match(/_(\d+)$/)
+    const match = e.id.match(new RegExp(`^${prefix}_(\\d+)$`))
     return match ? Math.max(max, parseInt(match[1], 10)) : max
   }, 0)
-  return `mem_${String(maxSeq + 1).padStart(3, '0')}`
+  return `${prefix}_${String(maxSeq + 1).padStart(3, '0')}`
+}
+
+// 检查 .gitignore 是否包含 .claude/memory
+export function checkGitignore(): boolean {
+  const { readFileSafe } = require('../../utils/file.js')
+  const { join } = require('path');
+  const { getCwd } = require('../../utils/cwd.js');
+  const content = readFileSafe(join(getCwd(), '.gitignore'))
+  if (!content) return false
+  return content.split('\n').some(line => {
+    const trimmed = line.trim()
+    return trimmed === '.claude/memory/' ||
+           trimmed === '.claude/memory' ||
+           trimmed === '*.claude/memory'
+  })
 }

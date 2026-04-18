@@ -2,6 +2,7 @@ import { join } from 'node:path'
 import { readFileSafe } from '../../utils/file.js'
 import { safeParseJSONC } from '../../utils/json.js'
 import { getCwd } from '../../utils/cwd.js'
+import { clearSystemPromptSectionState } from '../../bootstrap/state.js'
 import type { MemIndex } from './store.js'
 
 const MAX_ENTRIES = 10
@@ -38,4 +39,9 @@ export function loadMemSummaries(): string | null {
   lines.push('使用 /mem show <id> 加载完整内容')
 
   return lines.join('\n')
+}
+
+// 清除缓存，让下次 prompt 重新加载最新数据
+export function clearMemSummariesCache(): void {
+  clearSystemPromptSectionState('project_mem_summaries')
 }

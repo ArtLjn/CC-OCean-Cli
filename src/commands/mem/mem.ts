@@ -1,3 +1,4 @@
+import chalk from 'chalk'
 import type { LocalCommandCall } from '../../types/command.js'
 import {
   loadIndex,
@@ -6,8 +7,11 @@ import {
   readChunk,
   ensureMemDir,
   getNextId,
+  checkGitignore,
 } from './store.js'
 import { summarizeConversation, extractHandoff } from './summarizer.js'
+import { clearMemSummariesCache } from './injector.js'
+import { getUserContext } from '../../context.js'
 import type { MemEntry } from './store.js'
 
 function helpText(): string {
@@ -60,7 +64,17 @@ export const call: LocalCommandCall = async (args, context) => {
       await ensureMemDir()
 
       const index = loadIndex()
-      const id = getNextId(index)
+      const id = getNextId(index, userTitle)
+
+      // 检查 .gitignore
+      let gitignoreHint: string[] = []
+      if (!checkGitignore()) {
+        gitignoreHint = [
+          '',
+          chalk.dim('💡 提示: .claude/memory/ 未在 .gitignore 中，建议添加以避免提交到git'),
+          chalk.dim('   echo ".claude/memory/" >> .gitignore'),
+        ]
+      }
 
       if (isFull) {
         // --full 模式：提炼式交接，保留关键上下文
@@ -77,6 +91,9 @@ export const call: LocalCommandCall = async (args, context) => {
           size: 0,
         }
         await addEntry(entry, content)
+        // 清除缓存让当前会话能看到更新
+        clearMemSummariesCache()
+        getUserContext.cache.clear?.()
         return {
           type: 'text',
           value: [
@@ -86,6 +103,7 @@ export const call: LocalCommandCall = async (args, context) => {
             `摘要: ${summary}`,
             '',
             `使用 /mem show ${id} 查看完整交接内容`,
+            ...gitignoreHint,
           ].join('\n'),
         }
       }
@@ -106,6 +124,9 @@ export const call: LocalCommandCall = async (args, context) => {
       }
 
       await addEntry(entry, summary)
+      // 清除缓存让当前会话能看到更新
+      clearMemSummariesCache()
+      getUserContext.cache.clear?.()
       return {
         type: 'text',
         value: [
@@ -113,6 +134,7 @@ export const call: LocalCommandCall = async (args, context) => {
           `标题: ${entry.title}`,
           `标签: ${tags.join(', ') || '无'}`,
           `摘要: ${summary}`,
+          ...gitignoreHint,
         ].join('\n'),
       }
     }
@@ -138,6 +160,11 @@ export const call: LocalCommandCall = async (args, context) => {
       if (!id) return { type: 'text', value: '用法: /mem rm <id>' }
 
       const ok = await removeEntry(id)
+      if (ok) {
+        // 清除缓存让当前会话能看到更新
+        clearMemSummariesCache()
+        getUserContext.cache.clear?.()
+      }
       return { type: 'text', value: ok ? `已删除: ${id}` : `未找到: ${id}` }
     }
 

@@ -107,9 +107,11 @@ export function execFileNoThrowWithCwd(
 ): Promise<{ stdout: string; stderr: string; code: number; error?: string }> {
   return new Promise(resolve => {
     // Use execa for cross-platform .bat/.cmd compatibility on Windows
+    // Bun 1.3+ execa patches renamed "signal" to "cancelSignal"
+    const signalKey = typeof Bun !== 'undefined' ? 'cancelSignal' : 'signal'
     execa(file, args, {
       maxBuffer,
-      signal: abortSignal,
+      [signalKey]: abortSignal,
       timeout: finalTimeout,
       cwd: finalCwd,
       env: finalEnv,
