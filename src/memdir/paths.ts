@@ -221,9 +221,9 @@ export const getAutoMemPath = memoize(
     if (override) {
       return override
     }
-    const projectsDir = join(getMemoryBaseDir(), 'projects')
+    // Ocean CLI: 记忆存储在项目目录 .claude/memory/ 下，跟随项目而非用户全局
     return (
-      join(projectsDir, sanitizePath(getAutoMemBase()), AUTO_MEM_DIRNAME) + sep
+      join(getProjectRoot(), '.claude', AUTO_MEM_DIRNAME) + sep
     ).normalize('NFC')
   },
   () => getProjectRoot(),
