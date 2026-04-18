@@ -714,9 +714,8 @@ export function initialPermissionModeFromCLI({
   // AutoModeOptInDialog from showing in showSetupScreens() when auto can't
   // actually be entered. autoModeFlagCli still carries intent through to
   // verifyAutoModeGateAccess, which notifies the user why.
-  const autoModeCircuitBrokenSync = feature('TRANSCRIPT_CLASSIFIER')
-    ? getAutoModeEnabledStateIfCached() === 'disabled'
-    : false
+  // Ocean CLI: 始终允许 auto mode（不依赖 GrowthBook circuit breaker）
+  const autoModeCircuitBrokenSync = false
 
   // Modes in order of priority
   const orderedModes: PermissionMode[] = []
@@ -727,15 +726,9 @@ export function initialPermissionModeFromCLI({
   }
   if (permissionModeCli) {
     const parsedMode = permissionModeFromString(permissionModeCli)
-    if (feature('TRANSCRIPT_CLASSIFIER') && parsedMode === 'auto') {
-      if (autoModeCircuitBrokenSync) {
-        logForDebugging(
-          'auto mode circuit breaker active (cached) — falling back to default',
-          { level: 'warn' },
-        )
-      } else {
-        orderedModes.push('auto')
-      }
+    // Ocean CLI: 始终允许 auto 模式
+    if (parsedMode === 'auto') {
+      orderedModes.push('auto')
     } else {
       orderedModes.push(parsedMode)
     }
@@ -758,15 +751,9 @@ export function initialPermissionModeFromCLI({
       })
     }
     // auto from settings requires the same gate check as from CLI
-    else if (feature('TRANSCRIPT_CLASSIFIER') && settingsMode === 'auto') {
-      if (autoModeCircuitBrokenSync) {
-        logForDebugging(
-          'auto mode circuit breaker active (cached) — falling back to default',
-          { level: 'warn' },
-        )
-      } else {
-        orderedModes.push('auto')
-      }
+    // Ocean CLI: 始终允许 auto 模式
+    else if (settingsMode === 'auto') {
+      orderedModes.push('auto')
     } else {
       orderedModes.push(settingsMode)
     }
@@ -803,7 +790,8 @@ export function initialPermissionModeFromCLI({
     result = { mode: 'default', notification }
   }
 
-  if (feature('TRANSCRIPT_CLASSIFIER') && result.mode === 'auto') {
+  // Ocean CLI: 始终激活 auto mode（移除 TRANSCRIPT_CLASSIFIER 门控）
+  if (result.mode === 'auto') {
     autoModeStateModule?.setAutoModeActive(true)
   }
 
@@ -1310,7 +1298,8 @@ export function getAutoModeUnavailableReason(): AutoModeUnavailableReason | null
  */
 export type AutoModeEnabledState = 'enabled' | 'disabled' | 'opt-in'
 
-const AUTO_MODE_ENABLED_DEFAULT: AutoModeEnabledState = 'disabled'
+// Ocean CLI: 默认启用 auto mode（原 'disabled'）
+const AUTO_MODE_ENABLED_DEFAULT: AutoModeEnabledState = 'enabled'
 
 function parseAutoModeEnabledState(value: unknown): AutoModeEnabledState {
   if (value === 'enabled' || value === 'disabled' || value === 'opt-in') {
