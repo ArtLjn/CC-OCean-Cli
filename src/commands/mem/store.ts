@@ -18,7 +18,7 @@ export interface MemIndex {
   entries: MemEntry[]
 }
 
-const MEM_DIR_NAME = '.claude/memory'
+const MEM_DIR_NAME = '.claude/memory/manual'
 const INDEX_FILE = 'index.json'
 const CHUNKS_DIR = 'chunks'
 
@@ -114,6 +114,8 @@ export function checkGitignore(): boolean {
     const trimmed = line.trim()
     return trimmed === '.claude/memory/' ||
            trimmed === '.claude/memory' ||
+           trimmed === '.claude/memory/manual/' ||
+           trimmed === '.claude/memory/manual' ||
            trimmed === '*.claude/memory'
   })
 }

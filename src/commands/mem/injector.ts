@@ -9,7 +9,7 @@ const MAX_ENTRIES = 10
 const MAX_CHARS = 2000
 
 export function loadMemSummaries(): string | null {
-  const indexPath = join(getCwd(), '.claude/memory/index.json')
+  const indexPath = join(getCwd(), '.claude/memory/manual/index.json')
   const raw = readFileSafe(indexPath)
   if (!raw) return null
 
