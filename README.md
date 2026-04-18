@@ -33,13 +33,13 @@
 
 ```bash
 # 启动时指定 Channel MCP 服务器
-ocean --channels server:dingtalk-bot
+ocean --channels server:feishu-unofficial
 
 # 开发模式（跳过白名单检查）
-ocean --dangerously-load-development-channels server:dingtalk-bot
+ocean --dangerously-load-development-channels server:feishu-unofficial
 ```
 
-> 钉钉等 IM 平台通过插件接入，需安装对应的 Channel MCP Server。已有现成的钉钉 MCP Server（[open-dingtalk/dingtalk-mcp](https://github.com/open-dingtalk/dingtalk-mcp)），后续将扩展为 Channel 模式支持双向实时通信。
+> **已验证平台**：飞书（[详细接入教程](docs/08-channel-feishu.md)） | 钉钉（[open-dingtalk/dingtalk-mcp](https://github.com/open-dingtalk/dingtalk-mcp)）
 
 ### 🔧 增强开发功能
 - **智能Commit命令**：自动检测代码变更，生成符合Conventional Commits规范的提交信息

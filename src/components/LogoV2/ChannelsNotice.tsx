@@ -190,10 +190,10 @@ function _temp() {
   return {
     channels: ch,
     disabled: !isChannelsEnabled(),
-    noAuth: !getClaudeAIOAuthTokens()?.accessToken,
-    policyBlocked: managed && policy?.channelsEnabled !== true,
+    noAuth: false, // Ocean CLI: 跳过 OAuth 检查
+    policyBlocked: false, // Ocean CLI: 跳过组织策略检查
     list: l,
-    unmatched: findUnmatched(ch, allowlist)
+    unmatched: [] // Ocean CLI: 跳过白名单匹配检查
   };
 }
 function formatEntry(c: ChannelEntry): string {
