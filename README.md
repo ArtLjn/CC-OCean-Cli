@@ -225,6 +225,7 @@ bun test
 - ✅ 启用内置自动记忆提取（extractMemories），对话后后台自动保存记忆
 - ✅ 启用 AutoDream 记忆整合，定期去重修剪保持知识库精简
 - ✅ 修复 Bun 1.3.12 下 `@` 文件匹配失效问题（execa signal 兼容性）
+- ✅ 修复 Ctrl+V 粘贴图片失败（`image-processor.node` 占位符未校验 + sharp libvips 动态库路径不匹配）
 
 ## 📄 许可证
 

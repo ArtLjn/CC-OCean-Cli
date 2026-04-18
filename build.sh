@@ -38,19 +38,41 @@ for e in "${EXTERNALS[@]}"; do
 done
 bun build --target=bun --outfile=ocean.bundle.js ./src/dev-entry.ts "${ext_args[@]}"
 
-# 2. 编译 C 启动器
+# 3. 编译 C 启动器
 echo ">>> 编译启动器 ..."
 cc -O2 -o "$BIN_DIR/ocean" clmg_launcher.c
 codesign --force --sign - "$BIN_DIR/ocean"
 
-# 3. 部署 bundle 和 bun runtime
+# 4. 部署 bundle 和 bun runtime
 echo ">>> 部署 ..."
 cp ocean.bundle.js "$BIN_DIR/.ocean-bundle.js"
 cp "$HOME/.bun/bin/bun" "$BIN_DIR/.ocean-bun"
 
-# 4. 清除 macOS 隔离属性并重新签名
+# 5. 修复 sharp libvips 动态库路径
+# Bun 的缓存目录命名（@img/sharp-libvips-darwin-arm64@1.2.4@@@1）
+# 与 sharp 的 @rpath 期望路径（@img/sharp-libvips-darwin-arm64/lib/）不匹配，
+# 导致运行时 dlopen 找不到 libvips-cpp.dylib
+echo ">>> 修复 sharp libvips 路径 ..."
+SHARP_CACHE_DIR="$HOME/.bun/install/cache/@img"
+LIBVIPS_REAL_DIR=$(find "$SHARP_CACHE_DIR" -maxdepth 1 -type d -name 'sharp-libvips-darwin-arm64@*' | sort -V | tail -1)
+if [ -n "$LIBVIPS_REAL_DIR" ] && [ -d "$LIBVIPS_REAL_DIR/lib" ]; then
+  LIBVIPS_LINK="$SHARP_CACHE_DIR/sharp-libvips-darwin-arm64/lib"
+  mkdir -p "$LIBVIPS_LINK" 2>/dev/null || true
+  for item in "$LIBVIPS_REAL_DIR/lib/"*; do
+    name=$(basename "$item")
+    target="$LIBVIPS_LINK/$name"
+    if [ ! -e "$target" ]; then
+      ln -sf "$item" "$target"
+    fi
+  done
+  echo "    libvips 链接已创建: $LIBVIPS_LINK"
+else
+  echo "    警告: 未找到 sharp-libvips-darwin-arm64 缓存目录"
+fi
+
+# 6. 清除 macOS 隔离属性并重新签名
 echo ">>> 签名 ..."
-xattr -cr "$BIN_DIR/ocean" "$BIN_DIR/.ocean-bun" "$BIN_DIR/.ocean-bundle.js"
+xattr -cr "$BIN_DIR/ocean" "$BIN_DIR/.ocean-bundle.js" "$BIN_DIR/.ocean-bun"
 codesign --force --sign - "$BIN_DIR/ocean"
 codesign --force --sign - "$BIN_DIR/.ocean-bun"
 

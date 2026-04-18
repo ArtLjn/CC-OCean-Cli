@@ -45,8 +45,17 @@ export async function getImageProcessor(): Promise<SharpFunction> {
       // Use the native image processor module
       const imageProcessor = await import('image-processor-napi')
       const sharp = imageProcessor.sharp || imageProcessor.default
-      imageProcessorModule = { default: sharp }
-      return sharp
+      // Validate that the loaded module actually exports a callable sharp function.
+      // A placeholder .node file (e.g. containing "placeholder" text) will
+      // load as an empty object {}, which would cause TypeError when called.
+      if (typeof sharp === 'function') {
+        imageProcessorModule = { default: sharp }
+        return sharp
+      }
+      // biome-ignore lint/suspicious/noConsole: intentional warning
+      console.warn(
+        'Native image processor module loaded but sharp is not a function, falling back to sharp',
+      )
     } catch {
       // Fall back to sharp if native module is not available
       // biome-ignore lint/suspicious/noConsole: intentional warning
