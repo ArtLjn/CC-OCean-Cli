@@ -40,7 +40,10 @@ const AUTO_SKILLIFY_PROMPT = `# 自动技能提炼检测
 **如果用户选择"是"：**
 1. 分析会话中的完整工作流程
 2. 识别关键步骤、输入输出、成功标准
-3. 生成 SKILL.md 文件，格式如下：
+3. 判断是否需要生成辅助脚本（见下方脚本生成规则）
+4. 生成完整的 Skill 目录结构：
+
+### SKILL.md 格式
 
 \`\`\`markdown
 ---
@@ -67,9 +70,31 @@ when_to_use: {{详细描述何时自动触发}}
 ...
 \`\`\`
 
-4. 将 SKILL.md 保存到以下位置之一（优先项目级）：
-   - 当前项目的 \`.claude/skills/<name>/SKILL.md\`
-   - 用户级 \`~/.claude/skills/<name>/SKILL.md\`
+### 脚本生成规则
+
+当工作流满足以下任一条件时，必须生成 scripts/ 目录下的脚本文件：
+
+- 流程中包含**可自动化的数据处理**（如 JSON 转换、格式解析、数据聚合）
+- 流程中包含**重复执行的命令序列**（如编译+测试+部署流水线）
+- 流程中包含**需要参数化的模板生成**（如日报、报告、配置文件生成）
+- 流程中包含**文件格式解析或转换**（如 xmind、csv、xml 处理）
+
+脚本要求：
+- 优先使用 Python（标准库优先，减少外部依赖）
+- 脚本接受命令行参数，支持 --help
+- 在 SKILL.md 中通过 \`python3 <skill_dir>/scripts/xxx.py\` 引用
+
+生成的目录结构示例：
+\`\`\`
+.claude/skills/<name>/
+├── SKILL.md
+└── scripts/
+    └── xxx.py
+\`\`\`
+
+5. 将文件保存到以下位置之一（优先项目级）：
+   - 当前项目的 \`.claude/skills/<name>/SKILL.md\` 及 \`.claude/skills/<name>/scripts/\`
+   - 用户级 \`~/.claude/skills/<name>/SKILL.md\` 及 \`~/.claude/skills/<name>/scripts/\`
 
 **如果条件不满足：**
 不要提问，不要输出任何内容，直接结束。不要说"不符合条件"之类的话。
