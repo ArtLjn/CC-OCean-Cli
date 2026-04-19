@@ -147,13 +147,19 @@ ocean --permission-mode auto
 </p>
 
 ```bash
-ocean --channels server:feishu-unofficial
-ocean --channels server:dingtalk-mcp
+# 启动时绑定
+ocean --channels server:feishu
+
+# 会话中动态连接（无需重启）
+❯ /feishu                    # 快速连接飞书
+❯ /channel connect dingtalk  # 连接钉钉
+❯ /channel disconnect feishu  # 断开连接
 ```
 
 - **入站**：IM 消息 → Agent 接收执行
 - **出站**：Agent 结果 → IM 回复
 - **权限中继**：工具审批转发到 IM，远程回复 yes/no
+- **动态连接**：会话中途 `/feishu` 一键连接，离开后断开
 
 已验证平台：飞书、钉钉
 

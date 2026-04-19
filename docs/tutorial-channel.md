@@ -95,9 +95,34 @@ FEISHU_DOMAIN=lark
 
 ### 第 5 步：启动 Ocean CLI
 
+**方式一：启动时绑定（传统方式）**
+
 ```bash
-ocean --channels server:feishu-unofficial
+ocean --channels server:feishu
 ```
+
+**方式二：会话中动态连接（推荐）**
+
+启动时不需要 `--channels` 参数，直接进入会话：
+
+```bash
+ocean
+```
+
+工作到一半想离开时，输入 `/feishu` 即可动态连接：
+
+```
+❯ /feishu
+⏺ 飞书 Channel 已连接，现在可以通过飞书发送消息到当前会话。
+```
+
+断开连接：
+
+```
+❯ /channel disconnect feishu
+```
+
+> 动态连接原理：`/feishu` 通过文件 IPC 通知后台轮询进程，修改 `allowedChannels` 并注册 notification handler，无需重启会话。
 
 ### 第 6 步：配对
 
@@ -143,6 +168,12 @@ ocean --channels server:feishu-unofficial
 
 ```bash
 ocean --channels server:dingtalk
+```
+
+或会话中动态连接：
+
+```
+❯ /channel connect dingtalk
 ```
 
 钉钉 Channel 的具体配置细节请参考 dingtalk-mcp 项目的文档。
@@ -257,6 +288,47 @@ ocean --dangerously-load-development-channels server:feishu-unofficial
 # 同时指定多个 Channel
 ocean --channels server:feishu-unofficial server:dingtalk-bot
 ```
+
+---
+
+## 动态连接 Channel（会话中途）
+
+无需重启会话，随时连接或断开 IM Channel。
+
+### 快捷命令
+
+| 命令 | 说明 |
+|------|------|
+| `/feishu` | 快速连接飞书 Channel |
+| `/channel connect <name>` | 连接指定 Channel |
+| `/channel disconnect <name>` | 断开指定 Channel |
+| `/channel list` | 查看已配置的 MCP Server |
+
+### 使用场景
+
+```
+❯ ocean                          # 启动，正常工作
+❯ 帮我重构认证模块               # 执行任务...
+❯ /feishu                        # 中午要走了，连接飞书
+⏺ 飞书 Channel 已连接
+# 此时可以从飞书继续对话
+❯ /channel disconnect feishu     # 回来后断开
+```
+
+### 工作原理
+
+1. `/feishu` skill 通过 Bash 写入命令文件 `/tmp/ocean-channel-cmd.json`
+2. `useManageMCPConnections` 中的 500ms 轮询检测到文件
+3. 将 server name 追加到 `allowedChannels`（内存状态）
+4. 对已连接的 MCP client 调用 `gateChannelServer()` 验证
+5. 注册 `notifications/claude/channel` notification handler
+6. 断开时反向操作：移除 entry + `removeNotificationHandler()`
+
+### 前提条件
+
+- MCP server 必须已在 `.mcp.json` 或 `settings.json` 中配置
+- MCP server 必须处于 `connected` 状态（可用 `/mcp` 检查）
+- server name 必须与配置中的 key 一致
 
 ---
 

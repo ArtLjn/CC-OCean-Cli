@@ -18,7 +18,11 @@
 
 import type { ServerCapabilities } from '@modelcontextprotocol/sdk/types.js'
 import { z } from 'zod/v4'
-import { type ChannelEntry, getAllowedChannels } from '../../bootstrap/state.js'
+import {
+  type ChannelEntry,
+  getAllowedChannels,
+  setAllowedChannels,
+} from '../../bootstrap/state.js'
 import { CHANNEL_TAG } from '../../constants/xml.js'
 import {
   getClaudeAIOAuthTokens,
@@ -313,4 +317,43 @@ export function gateChannelServer(
   }
 
   return { action: 'register' }
+}
+
+// ============================================================================
+// Dynamic channel connect/disconnect (mid-session)
+// ============================================================================
+
+/**
+ * Dynamically connect a channel server mid-session.
+ * Adds the entry to allowedChannels so gateChannelServer() passes.
+ * Returns the entry that was added (or already existed).
+ */
+export function connectChannelDynamic(
+  serverName: string,
+): { entry: ChannelEntry; added: boolean } {
+  const prior = getAllowedChannels()
+  const existing = findChannelEntry(serverName, prior)
+  if (existing) {
+    return { entry: existing, added: false }
+  }
+  const entry: ChannelEntry = { kind: 'server', name: serverName }
+  setAllowedChannels([...prior, entry])
+  return { entry, added: true }
+}
+
+/**
+ * Dynamically disconnect a channel server mid-session.
+ * Removes the entry from allowedChannels so the next re-gate skips it.
+ * Returns true if an entry was actually removed.
+ */
+export function disconnectChannelDynamic(serverName: string): boolean {
+  const prior = getAllowedChannels()
+  const idx = prior.findIndex(
+    e => e.kind === 'server' && e.name === serverName,
+  )
+  if (idx === -1) return false
+  const next = [...prior]
+  next.splice(idx, 1)
+  setAllowedChannels(next)
+  return true
 }

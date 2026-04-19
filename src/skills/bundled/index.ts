@@ -8,6 +8,7 @@ import { registerLoremIpsumSkill } from './loremIpsum.js'
 import { registerRememberSkill } from './remember.js'
 import { registerSimplifySkill } from './simplify.js'
 import { registerAutoSkillifySkill } from './autoSkillify.js'
+import { registerChannelCommandSkill } from './channelCommand.js'
 import { registerSkillifySkill } from './skillify.js'
 import { registerStuckSkill } from './stuck.js'
 import { registerUpdateConfigSkill } from './updateConfig.js'
@@ -30,6 +31,7 @@ export function initBundledSkills(): void {
   registerLoremIpsumSkill()
   registerSkillifySkill()
   registerAutoSkillifySkill()
+  registerChannelCommandSkill()
   registerRememberSkill()
   registerSimplifySkill()
   registerBatchSkill()
