@@ -167,30 +167,31 @@ ocean --channels server:feishu
 
 ## 快速开始
 
-### 1. 安装 Bun
+### 一键安装（推荐）
 
 ```bash
-# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/ArtLjn/ocean-cc-cli/main/install.sh | bash
+```
+
+> 脚本会自动安装 Bun、克隆仓库、构建并部署到 `~/.local/bin/ocean`。
+
+### 手动安装
+
+```bash
+# 1. 安装 Bun
 curl -fsSL https://bun.sh/install | bash
 
-# macOS (Homebrew)
-brew install bun
+# 2. 克隆并构建
+git clone https://github.com/ArtLjn/ocean-cc-cli.git && cd ocean-cc-cli
+bun install && ./build.sh
 ```
 
-### 2. 安装并构建
+### 启动
 
 ```bash
-git clone https://github.com/your-repo/ocean-cli.git && cd ocean-cli
-bun install
-./build.sh
-```
-
-### 3. 启动
-
-```bash
-./ocean                          # 交互 TUI 模式
-./ocean --permission-mode auto   # Auto Mode
-./ocean -p "your prompt"         # 无头模式
+ocean                          # 交互 TUI 模式
+ocean --permission-mode auto   # Auto Mode
+ocean -p "your prompt"         # 无头模式
 ```
 
 ---
