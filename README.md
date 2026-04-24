@@ -26,7 +26,7 @@
 - 完整的 Ink TUI 交互界面（与官方 Claude Code 一致）
 - **多模型接入** — Claude / 智谱GLM / 豆包 / DeepSeek，`/model` 一键切换
 - **Auto Mode** — AI 分类器自动审批安全操作，危险操作仍需确认
-- **双层记忆系统** — `/mem` 手动记忆 + 自动提取 + AutoDream 整合 — [使用指南](docs/tutorial-memory.md)
+- **三层记忆系统** — `/mem` 手动记忆 + 自动提取 + AutoDream 整合 + 结构化事实存储（SQLite+FTS5） — [使用指南](docs/tutorial-memory.md)
 - **多模型协作** — `/multi-agent` 按角色分工，真实并行调用 — [使用指南](docs/tutorial-multi-agent.md)
 - **技能系统** — `/skillify` 从会话提炼技能，支持脚本自动生成 — [使用指南](docs/tutorial-skills.md)
 - **Channel IM 集成** — 飞书/钉钉/Telegram 远程控制 Agent — [使用指南](docs/tutorial-channel.md)
@@ -75,23 +75,30 @@ ocean --permission-mode auto
 { "permissions": { "defaultMode": "auto" } }
 ```
 
-### 3. 双层记忆系统
+### 3. 三层记忆系统
 
 ```
-┌─────────────────────────────────────────────┐
-│  手动记忆 (/mem)     自动记忆 (extractMemories) │
-│  ┌──────────────┐    ┌──────────────────┐    │
-│  │ 项目知识片段   │    │ 用户画像/反馈/动态  │    │
-│  │ 压缩总结      │    │ 后台分叉代理自动提取  │    │
-│  │ 工作交接      │    │ 四种记忆类型        │    │
-│  └──────┬───────┘    └────────┬─────────┘    │
-│         └────────┬───────────┘                │
-│                  ▼                            │
-│         AutoDream 整合引擎                     │
-│         去重 · 修剪 · 压缩索引                  │
-│         (24h / 5 session 触发)                 │
-└─────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│  手动记忆 (/mem)     自动记忆 (extractMemories)   结构化事实  │
+│  ┌──────────────┐    ┌──────────────────┐    ┌───────────┐ │
+│  │ 项目知识片段   │    │ 用户画像/反馈/动态  │    │ fact_store │ │
+│  │ 压缩总结      │    │ 后台分叉代理自动提取  │    │ SQLite+FTS5│ │
+│  │ 工作交接      │    │ 四种记忆类型        │    │ 实体+信任评分│ │
+│  └──────┬───────┘    └────────┬─────────┘    └─────┬─────┘ │
+│         └────────┬───────────┘                     │       │
+│                  ▼                                  ▼       │
+│         AutoDream 整合引擎              <memory-context>    │
+│         去重 · 修剪 · 压缩索引           围栏注入（<10ms）    │
+│         (24h / 5 session 触发)                              │
+└──────────────────────────────────────────────────────────────┘
 ```
+
+**结构化事实存储** (`~/.claude/memory/facts.db`)：
+- SQLite + FTS5 全文索引，本地毫秒级检索，替代 Sonnet API 调用
+- 实体自动提取 + 信任评分（helpful +0.05 / unhelpful -0.10）
+- 五种检索模式：search / probe / reason / related / contradict
+- 全局存储，用户偏好跨项目共享（借鉴 Hermes 架构）
+- 后台审查 Agent 自动提取：extractMemories 的 forked agent 同时写入 fact_store
 
 ```bash
 /mem                    # 列出所有记忆
@@ -206,6 +213,7 @@ ocean -p "your prompt"         # 无头模式
 | CLI 解析 | Commander.js |
 | API | Anthropic SDK |
 | 协议 | MCP, LSP |
+| 记忆存储 | SQLite (bun:sqlite) + FTS5 |
 
 ---
 
@@ -216,6 +224,7 @@ ocean -p "your prompt"         # 无头模式
 │   ├── agents/             # Agent 实现
 │   ├── skills/             # 技能系统
 │   │   └── bundled/        # 内置技能（skillify、auto-skillify 等）
+│   ├── memory/             # 结构化记忆系统（MemoryProvider + SQLite + FTS5）
 │   ├── providers/          # 模型提供商接入
 │   ├── utils/hooks/        # Hook 系统核心
 │   └── cli/                # 命令行界面
@@ -251,6 +260,14 @@ ocean -p "your prompt"         # 无头模式
 ---
 
 ## 更新日志
+
+### v1.3.0
+- 结构化事实记忆系统（fact_store）：SQLite + FTS5 毫秒级本地检索
+- MemoryProvider 插件接口 + MemoryManager 编排器（借鉴 Hermes 架构）
+- 五种高级检索：search / probe / related / reason / contradict
+- `<memory-context>` 围栏注入 + 安全扫描（注入检测/PII/不可见Unicode）
+- 后台审查 Agent 自动提取事实（extractMemories 集成 fact_store）
+- 信任评分 + 反馈机制（fact_feedback 工具）
 
 ### v1.2.0
 - 技能自动提炼（auto-skillify）：Stop hook 检测 + scripts 目录支持

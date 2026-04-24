@@ -1986,6 +1986,21 @@ async function run(): Promise<CommanderCommand> {
       // getCommands Promise.all await below. Trust is implicit in -p mode
       // (same gate as prefetchSystemContextIfSafe).
       void getSystemContext();
+      // Initialize Holographic memory (SQLite + FTS5). Lazily creates the
+      // MemoryManager singleton — providers are ready when prefetch runs.
+      try {
+        const { getMemoryManager } = require('./memory/instance.js') as typeof import('./memory/instance.js');
+        const mgr = getMemoryManager({
+          sessionId: process.env.SESSION_ID ?? '',
+          projectRoot: getCwd(),
+          configHome: getCwd(),
+        });
+        if (!mgr) {
+          console.error('[Memory] getMemoryManager returned null');
+        }
+      } catch (e) {
+        console.error('[Memory] init failed:', e);
+      }
       // Kick getUserContext now too — its first await (fs.readFile in
       // getMemoryFiles) yields naturally, so the CLAUDE.md directory walk
       // runs during the ~280ms overlap window before the context
@@ -2503,6 +2518,11 @@ async function run(): Promise<CommanderCommand> {
     });
     registerCleanup(async () => {
       logForDiagnosticsNoPII('info', 'exited');
+      // Shutdown Holographic memory manager (flush SQLite, close connections)
+      try {
+        const { shutdownMemoryManager } = require('./memory/instance.js') as typeof import('./memory/instance.js');
+        shutdownMemoryManager();
+      } catch {}
     });
     void logTenguInit({
       hasInitialPrompt: Boolean(prompt),

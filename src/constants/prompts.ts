@@ -494,6 +494,20 @@ ${CYBER_RISK_INSTRUCTION}`,
       getSessionSpecificGuidanceSection(enabledTools, skillToolCommands),
     ),
     systemPromptSection('memory', () => loadMemoryPrompt()),
+    systemPromptSection('holographic_memory', () => {
+      try {
+        const { getMemoryManager } = require('../memory/instance.js') as typeof import('../memory/instance.js')
+        const { getCwd } = require('../utils/cwd.js') as typeof import('../utils/cwd.js')
+        const manager = getMemoryManager() ?? getMemoryManager({
+          sessionId: process.env.SESSION_ID ?? '',
+          projectRoot: getCwd(),
+          configHome: getCwd(),
+        })
+        return manager?.buildSystemPrompt() ?? null
+      } catch {
+        return null
+      }
+    }),
     systemPromptSection('project_mem_summaries', () => loadMemSummaries()),
     systemPromptSection('ant_model_override', () =>
       getAntModelOverrideSection(),

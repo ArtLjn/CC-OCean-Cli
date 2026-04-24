@@ -2365,14 +2365,40 @@ export function startRelevantMemoryPrefetch(
   messages: ReadonlyArray<Message>,
   toolUseContext: ToolUseContext,
 ): MemoryPrefetch | undefined {
+  // --- Holographic fast path (synchronous, <10ms, no API call) ---
+  const lastUserMsg = messages.findLast(m => m.type === 'user' && !m.isMeta)
+  const holographicPrefetch = (() => {
+    if (!lastUserMsg) return ''
+    const input = getUserMessageText(lastUserMsg)
+    if (!input) return ''
+    try {
+      const { getMemoryManager } = require('../memory/instance.js') as typeof import('../memory/instance.js')
+      const manager = getMemoryManager()
+      return manager?.prefetchAll(input) ?? ''
+    } catch {
+      return ''
+    }
+  })()
+
   if (
     !isAutoMemoryEnabled() ||
     !getFeatureValue_CACHED_MAY_BE_STALE('tengu_moth_copse', false)
   ) {
+    // memdir prefetch disabled — return holographic-only result if available
+    if (holographicPrefetch) {
+      const promise = Promise.resolve([{ type: 'text', content: holographicPrefetch }])
+      const handle: MemoryPrefetch = {
+        promise,
+        settledAt: Date.now(),
+        consumedOnIteration: -1,
+        [Symbol.dispose]() {},
+      }
+      return handle
+    }
     return undefined
   }
 
-  const lastUserMessage = messages.findLast(m => m.type === 'user' && !m.isMeta)
+  const lastUserMessage = lastUserMsg
   if (!lastUserMessage) {
     return undefined
   }
@@ -2380,6 +2406,16 @@ export function startRelevantMemoryPrefetch(
   const input = getUserMessageText(lastUserMessage)
   // Single-word prompts lack enough context for meaningful term extraction
   if (!input || !/\s/.test(input.trim())) {
+    if (holographicPrefetch) {
+      const promise = Promise.resolve([{ type: 'text', content: holographicPrefetch }])
+      const handle: MemoryPrefetch = {
+        promise,
+        settledAt: Date.now(),
+        consumedOnIteration: -1,
+        [Symbol.dispose]() {},
+      }
+      return handle
+    }
     return undefined
   }
 
@@ -2392,7 +2428,7 @@ export function startRelevantMemoryPrefetch(
   // immediately, not just on [Symbol.dispose] when queryLoop exits.
   const controller = createChildAbortController(toolUseContext.abortController)
   const firedAt = Date.now()
-  const promise = getRelevantMemoryAttachments(
+  const memdirPromise = getRelevantMemoryAttachments(
     input,
     toolUseContext.options.agentDefinitions.activeAgents,
     toolUseContext.readFileState,
@@ -2405,6 +2441,14 @@ export function startRelevantMemoryPrefetch(
     }
     return []
   })
+
+  // Merge memdir results with holographic prefetch
+  const promise = holographicPrefetch
+    ? memdirPromise.then(attachments => {
+        const holographicAttachment = { type: 'text' as const, content: holographicPrefetch }
+        return [...attachments, holographicAttachment as unknown as Attachment]
+      })
+    : memdirPromise
 
   const handle: MemoryPrefetch = {
     promise,

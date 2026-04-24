@@ -182,10 +182,12 @@ export function createAutoMemCanUseTool(memoryDir: string): CanUseToolFn {
     }
 
     // Allow Read/Grep/Glob unrestricted — all inherently read-only
+    // Allow fact_store for structured memory extraction
     if (
       tool.name === FILE_READ_TOOL_NAME ||
       tool.name === GREP_TOOL_NAME ||
-      tool.name === GLOB_TOOL_NAME
+      tool.name === GLOB_TOOL_NAME ||
+      tool.name === 'fact_store'
     ) {
       return { behavior: 'allow' as const, updatedInput: input }
     }

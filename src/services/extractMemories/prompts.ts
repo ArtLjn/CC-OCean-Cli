@@ -34,7 +34,7 @@ function opener(newMessageCount: number, existingMemories: string): string {
   return [
     `You are now acting as the memory extraction subagent. Analyze the most recent ~${newMessageCount} messages above and use them to update your persistent memory systems.`,
     '',
-    `Available tools: ${FILE_READ_TOOL_NAME}, ${GREP_TOOL_NAME}, ${GLOB_TOOL_NAME}, read-only ${BASH_TOOL_NAME} (ls/find/cat/stat/wc/head/tail and similar), and ${FILE_EDIT_TOOL_NAME}/${FILE_WRITE_TOOL_NAME} for paths inside the memory directory only. ${BASH_TOOL_NAME} rm is not permitted. All other tools — MCP, Agent, write-capable ${BASH_TOOL_NAME}, etc — will be denied.`,
+    `Available tools: ${FILE_READ_TOOL_NAME}, ${GREP_TOOL_NAME}, ${GLOB_TOOL_NAME}, read-only ${BASH_TOOL_NAME} (ls/find/cat/stat/wc/head/tail and similar), ${FILE_EDIT_TOOL_NAME}/${FILE_WRITE_TOOL_NAME} for paths inside the memory directory only, and fact_store for structured fact storage. ${BASH_TOOL_NAME} rm is not permitted. All other tools — MCP, Agent, write-capable ${BASH_TOOL_NAME}, etc — will be denied.`,
     '',
     `You have a limited turn budget. ${FILE_EDIT_TOOL_NAME} requires a prior ${FILE_READ_TOOL_NAME} of the same file, so the efficient strategy is: turn 1 — issue all ${FILE_READ_TOOL_NAME} calls in parallel for every file you might update; turn 2 — issue all ${FILE_WRITE_TOOL_NAME}/${FILE_EDIT_TOOL_NAME} calls in parallel. Do not interleave reads and writes across multiple turns.`,
     '',
@@ -90,6 +90,17 @@ export function buildExtractAutoOnlyPrompt(
     ...WHAT_NOT_TO_SAVE_SECTION,
     '',
     ...howToSave,
+    '',
+    '## Structured facts (fact_store)',
+    '',
+    'For personal facts about the user (name, role, preferences, relationships), also save to fact_store:',
+    '',
+    '- `fact_store(action="add", content="...", category="user_pref", tags="...")` for user preferences and identity',
+    '- `fact_store(action="add", content="...", category="project", tags="...")` for project decisions and architecture',
+    '- `fact_store(action="add", content="...", category="tool", tags="...")` for tool knowledge and conventions',
+    '- Use `fact_store(action="search", query="...")` to check for existing facts before adding duplicates',
+    '',
+    'Example: user says "记住我叫暖暖" → write to both memory file AND `fact_store(action="add", content="用户名叫暖暖", category="user_pref", tags="name")`',
   ].join('\n')
 }
 
@@ -150,5 +161,14 @@ export function buildExtractCombinedPrompt(
     '- You MUST avoid saving sensitive data within shared team memories. For example, never save API keys or user credentials.',
     '',
     ...howToSave,
+    '',
+    '## Structured facts (fact_store)',
+    '',
+    'For personal facts about the user (name, role, preferences, relationships), also save to fact_store:',
+    '',
+    '- `fact_store(action="add", content="...", category="user_pref", tags="...")` for user preferences and identity',
+    '- `fact_store(action="add", content="...", category="project", tags="...")` for project decisions and architecture',
+    '- `fact_store(action="add", content="...", category="tool", tags="...")` for tool knowledge and conventions',
+    '- Use `fact_store(action="search", query="...")` to check for existing facts before adding duplicates',
   ].join('\n')
 }
