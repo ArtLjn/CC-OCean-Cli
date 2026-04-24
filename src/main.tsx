@@ -3,6 +3,12 @@
 // 2. startMdmRawRead fires MDM subprocesses (plutil/reg query) so they run in
 //    parallel with the remaining ~135ms of imports below
 // 3. startKeychainPrefetch fires both macOS keychain reads (OAuth + legacy API
+// Ensure local addresses bypass HTTP proxy (prevents MCP SSE connections to
+// 127.0.0.1 / localhost from being routed through a proxy)
+if (!process.env.no_proxy?.includes('127.0.0.1')) {
+  process.env.no_proxy = ['127.0.0.1', 'localhost', ...(process.env.no_proxy || '').split(',').filter(Boolean)].join(',')
+  process.env.NO_PROXY = process.env.no_proxy
+}
 //    key) in parallel — isRemoteManagedSettingsEligible() otherwise reads them
 //    sequentially via sync spawn inside applySafeConfigEnvironmentVariables()
 //    (~65ms on every macOS startup)

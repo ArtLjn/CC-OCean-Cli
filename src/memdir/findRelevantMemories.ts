@@ -13,6 +13,7 @@ import {
 export type RelevantMemory = {
   path: string
   mtimeMs: number
+  pinned?: boolean
 }
 
 const SELECT_MEMORIES_SYSTEM_PROMPT = `You are selecting memories that will be useful to OCean Cli as it processes a user's query. You will be given the user's query and a list of available memory files with their filenames and descriptions.
@@ -50,13 +51,15 @@ export async function findRelevantMemories(
     return []
   }
 
-  const selectedFilenames = await selectRelevantMemories(
-    query,
-    memories,
-    signal,
-    recentTools,
-  )
-  const byFilename = new Map(memories.map(m => [m.filename, m]))
+  // Pinned memories bypass Sonnet selection — always included
+  const pinned = memories.filter(m => m.pinned)
+  const nonPinned = memories.filter(m => !m.pinned)
+
+  // Sonnet selects from non-pinned memories only
+  const selectedFilenames = nonPinned.length > 0
+    ? await selectRelevantMemories(query, nonPinned, signal, recentTools)
+    : []
+  const byFilename = new Map(nonPinned.map(m => [m.filename, m]))
   const selected = selectedFilenames
     .map(filename => byFilename.get(filename))
     .filter((m): m is MemoryHeader => m !== undefined)
@@ -71,7 +74,10 @@ export async function findRelevantMemories(
     logMemoryRecallShape(memories, selected)
   }
 
-  return selected.map(m => ({ path: m.filePath, mtimeMs: m.mtimeMs }))
+  return [
+    ...pinned.map(m => ({ path: m.filePath, mtimeMs: m.mtimeMs, pinned: true as const })),
+    ...selected.map(m => ({ path: m.filePath, mtimeMs: m.mtimeMs })),
+  ]
 }
 
 async function selectRelevantMemories(

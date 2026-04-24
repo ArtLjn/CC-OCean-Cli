@@ -16,6 +16,7 @@ export type MemoryHeader = {
   mtimeMs: number
   description: string | null
   type: MemoryType | undefined
+  pinned: boolean
 }
 
 const MAX_MEMORY_FILES = 200
@@ -59,6 +60,7 @@ export async function scanMemoryFiles(
           mtimeMs,
           description: frontmatter.description || null,
           type: parseMemoryType(frontmatter.type),
+          pinned: frontmatter.pinned === true || frontmatter.pinned === 'true',
         }
       }),
     )

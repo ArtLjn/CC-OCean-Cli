@@ -2228,10 +2228,13 @@ async function getRelevantMemoryAttachments(
   // model read via FileReadTool. The redundant alreadySurfaced check here
   // is a belt-and-suspenders guard (multi-dir results may re-introduce a
   // path the selector filtered in a different dir).
-  const selected = allResults
+  // Pinned memories bypass the 5-slot budget — they are always surfaced.
+  const flat = allResults
     .flat()
     .filter(m => !readFileState.has(m.path) && !alreadySurfaced.has(m.path))
-    .slice(0, 5)
+  const pinnedSelected = flat.filter(m => m.pinned)
+  const regularSelected = flat.filter(m => !m.pinned).slice(0, 5)
+  const selected = [...pinnedSelected, ...regularSelected]
 
   const memories = await readMemoriesForSurfacing(selected, signal)
 

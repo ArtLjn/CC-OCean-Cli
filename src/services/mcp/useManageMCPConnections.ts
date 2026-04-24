@@ -474,6 +474,14 @@ export function useManageMCPConnections(
           // Gate decides whether to register the handler; connection stays
           // up either way (allowedMcpServers controls that).
           if (true) { // Ocean CLI: Channel 始终启用
+            // Ocean CLI: 自动将有 claude/channel capability 的 server 加入 allowlist
+            if (
+              client.capabilities?.experimental?.['claude/channel'] &&
+              !findChannelEntry(client.name, getAllowedChannels())
+            ) {
+              connectChannelDynamic(client.name)
+              logMCPDebug(client.name, 'Auto-registered channel server (no --channels needed)')
+            }
             const gate = gateChannelServer(
               client.name,
               client.capabilities,
@@ -1127,103 +1135,6 @@ export function useManageMCPConnections(
     },
     [store, updateServer, onConnectionAttempt],
   )
-
-  // Dynamic channel connect/disconnect via file-based IPC.
-  // The /channel bundled skill writes JSON commands to /tmp/ocean-channel-cmd.json;
-  // this effect polls the file and performs the actual connection/disconnection.
-  useEffect(() => {
-    const CMD_FILE = `/tmp/ocean-channel-cmd.json`
-    const fs = require('fs') as typeof import('fs')
-    const timer = setInterval(() => {
-      let cmd: { action: string; serverName: string } | null = null
-      try {
-        const raw = fs.readFileSync(CMD_FILE, 'utf8')
-        cmd = JSON.parse(raw)
-        fs.unlinkSync(CMD_FILE)
-      } catch {
-        return
-      }
-      if (!cmd) return
-
-      const clients = store.getState().mcp.clients
-      const client = clients.find(
-        c => c.name === cmd.serverName && c.type === 'connected',
-      )
-      if (!client || client.type !== 'connected') {
-        logMCPDebug(
-          cmd.serverName,
-          `Dynamic channel: server not connected, skipping`,
-        )
-        return
-      }
-
-      if (cmd.action === 'connect') {
-        const { added } = connectChannelDynamic(cmd.serverName)
-        if (!added) {
-          logMCPDebug(cmd.serverName, `Dynamic channel: already enabled`)
-          return
-        }
-        const gate = gateChannelServer(
-          cmd.serverName,
-          client.capabilities,
-          client.config.pluginSource,
-        )
-        if (gate.action === 'register') {
-          client.client.setNotificationHandler(
-            ChannelMessageNotificationSchema(),
-            async notification => {
-              const { content, meta } = notification.params
-              logMCPDebug(
-                cmd.serverName,
-                `Dynamic channel msg: ${content.slice(0, 80)}`,
-              )
-              enqueue({
-                mode: 'prompt',
-                value: wrapChannelMessage(cmd.serverName, content, meta),
-                priority: 'next',
-                isMeta: true,
-                origin: { kind: 'channel', server: cmd.serverName },
-                skipSlashCommands: true,
-              })
-            },
-          )
-          if (
-            client.capabilities?.experimental?.[
-              'claude/channel/permission'
-            ] !== undefined
-          ) {
-            client.client.setNotificationHandler(
-              ChannelPermissionNotificationSchema(),
-              async notification => {
-                const { request_id, behavior } = notification.params
-                channelPermCallbacksRef.current?.resolve(
-                  request_id,
-                  behavior,
-                  cmd.serverName,
-                )
-              },
-            )
-          }
-          logMCPDebug(
-            cmd.serverName,
-            `Dynamic channel: connected, handler registered`,
-          )
-        } else {
-          disconnectChannelDynamic(cmd.serverName)
-          logMCPDebug(
-            cmd.serverName,
-            `Dynamic channel: gate blocked — ${gate.reason}`,
-          )
-        }
-      } else if (cmd.action === 'disconnect') {
-        disconnectChannelDynamic(cmd.serverName)
-        client.client.removeNotificationHandler('notifications/claude/channel')
-        client.client.removeNotificationHandler(CHANNEL_PERMISSION_METHOD)
-        logMCPDebug(cmd.serverName, `Dynamic channel: disconnected`)
-      }
-    }, 500)
-    return () => clearInterval(timer)
-  }, [store])
 
   return { reconnectMcpServer, toggleMcpServer }
 }
