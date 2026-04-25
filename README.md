@@ -26,7 +26,7 @@
 - 完整的 Ink TUI 交互界面（与官方 Claude Code 一致）
 - **多模型接入** — Claude / 智谱GLM / 豆包 / DeepSeek，`/model` 一键切换
 - **Auto Mode** — AI 分类器自动审批安全操作，危险操作仍需确认
-- **双层记忆系统** — 纯 SQLite 结构化事实存储（全局+项目双层隔离）+ 自动提取 + AutoDream 清洗 — [使用指南](docs/tutorial-memory.md)
+- **双层记忆系统** — 纯 SQLite 结构化事实存储（6 种分类 + 全局/项目双层隔离）+ 自动提取 + 语义去重 + AutoDream 清洗 — [使用指南](docs/tutorial-memory.md)
 - **多模型协作** — `/multi-agent` 按角色分工，真实并行调用 — [使用指南](docs/tutorial-multi-agent.md)
 - **技能系统** — `/skillify` 从会话提炼技能，支持脚本自动生成 — [使用指南](docs/tutorial-skills.md)
 - **Channel IM 集成** — 飞书/钉钉/Telegram 远程控制 Agent — [使用指南](docs/tutorial-channel.md)
@@ -85,7 +85,7 @@ ocean --permission-mode auto
 - **双层隔离** — 用户偏好全局共享，项目知识跟随项目，不串台
 - **自动提取** — 每轮对话结束，后台 fork agent 自动提取用户偏好、项目结构、技术栈等事实写入 SQLite
 - **FTS5 + 中文 bigram** — 写入时预分词，毫秒级本地检索，不依赖 API
-- **语义去重 + Upsert** — 相似事实自动合并更新，不会无限增长
+- **语义去重 + Upsert** — Jaccard + 包含率双重预筛，相似事实合并更新，不会无限增长
 - **实体自动提取** — 中英文实体识别 + 自动分类（person/technology/topic）
 - **信任评分** — helpful +0.05 / unhelpful -0.10，低信任事实自动降权
 - **五种高级检索** — search / probe / reason / related / contradict
@@ -111,7 +111,7 @@ ocean --permission-mode auto
 |------|------|------|
 | `fact_id` | INTEGER PK | 自增主键 |
 | `content` | TEXT UNIQUE | 事实内容（唯一约束防重复） |
-| `category` | TEXT | 分类：user_pref / project / tool / general |
+| `category` | TEXT | 分类：identity / coding_style / tool_pref / workflow / project / general |
 | `tags` | TEXT | 逗号分隔标签（含中文 bigram 预分词结果） |
 | `trust_score` | REAL | 信任评分（0.0~1.0，默认 0.5） |
 | `retrieval_count` | INTEGER | 被检索次数 |
@@ -305,6 +305,15 @@ ocean -p "your prompt"         # 无头模式
 ---
 
 ## 更新日志
+
+### v1.5.0
+- 全局记忆分类细化：从 4 种 category 扩展到 6 种（identity / coding_style / tool_pref / workflow / project / general）
+- 分层注入策略：identity/workflow 始终注入，coding_style 按项目技术栈匹配注入，其他走 prefetch
+- 语义去重增强：Jaccard + 包含率双重预筛（解决长短文本匹配问题），阈值 0.6
+- 实体提取修复：去掉 bigram 碎片入库，新增中文声明模式提取（"我叫XXX"、"名字是XXX"）
+- 孤立实体自动清理：update/remove 事实时自动清理无关联实体
+- system prompt 引导 AI 主动操作 fact_store（"记住"时立即写入，update 时保留旧信息）
+- 旧数据自动迁移（user_pref/tool → 新 category）
 
 ### v1.4.1
 - 修复自动记忆提取从未触发（绕过 tengu_passport_quail feature flag）

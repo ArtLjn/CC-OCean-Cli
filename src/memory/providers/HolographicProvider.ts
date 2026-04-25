@@ -194,8 +194,12 @@ export class HolographicProvider extends MemoryProvider {
     let block = '# 结构化记忆\n'
     if (globalCount > 0) block += `全局事实库 ${globalCount} 条。`
     if (projectCount > 0) block += `项目事实库 ${projectCount} 条。`
-    block += '\n\n**重要**：回答关于用户、项目、技术栈的问题时，先查 fact_store 再读文件。'
-    block += '\n支持 search/probe/related/reason/contradict 操作。'
+    block += '\n\n**读取**：回答关于用户、项目、技术栈的问题时，先查 fact_store 再读文件。'
+    block += '\n**写入**：当用户说"记住"、"记下来"、"以后记住"时，必须立即用 fact_store 保存。'
+    block += '\n- 先 search 检查是否已有相似事实，有则 update，无则 add。'
+    block += '\n- update 时必须保留旧事实中的所有有效信息，只修改变化的部分。'
+    block += '\n  例如：用户说"改名叫柳叶眉"，旧事实是"AI角色叫暖暖，身份是编程女朋友，回答风格要亲昵..."'
+    block += '\n  → update 为"AI角色叫柳叶眉，身份是编程女朋友，回答风格要亲昵..."，只改名，不丢其他信息。'
 
     // 层 1：identity 始终注入
     const identityFacts = this.globalStore?.listFacts('identity', 0.0, 20) ?? []
@@ -311,9 +315,10 @@ export class HolographicProvider extends MemoryProvider {
           if (!args.content) return JSON.stringify({ error: "Missing required argument: content" })
           const store = this.routeStore(resolvedCategory)
 
-          // Upsert: 先检查语义相似，有则更新，无则新增
+          // 去重：Jaccard 预筛，找到相似候选
           const similar = store.findSimilarFact(args.content, resolvedCategory)
           if (similar) {
+            // 直接合并：用新内容替换旧内容，小幅提升信任
             store.updateFact(similar.factId, {
               content: args.content,
               tags: args.tags,

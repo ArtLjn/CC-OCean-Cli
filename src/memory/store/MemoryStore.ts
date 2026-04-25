@@ -85,6 +85,7 @@ export class MemoryStore {
     this.db.run('PRAGMA foreign_keys=ON')
     this.initSchema()
     this.prepareStatements()
+    this.cleanOrphanEntities()
   }
 
   private initSchema(): void {
@@ -158,17 +159,27 @@ export class MemoryStore {
     return insertFacts()
   }
 
-  /** 查找语义相似的事实（Jaccard >= threshold），用于调用方决定 update vs add */
+  /**
+   * 查找语义相似的事实。
+   * 综合评分 = max(Jaccard, 包含率)，解决长文本 vs 短文本的匹配问题。
+   */
   findSimilarFact(content: string, category: FactCategory, threshold = 0.6): Fact | null {
     const tokens = this.tokenizeForDedup(content)
     if (tokens.size < 3) return null
     const existing = this.listFacts(category, 0.0, 50)
+    let bestMatch: Fact | null = null
+    let bestScore = 0
     for (const fact of existing) {
       const factTokens = this.tokenizeForDedup(fact.content)
-      const sim = this.jaccardSimilarity(tokens, factTokens)
-      if (sim >= threshold) return fact
+      const jaccard = this.jaccardSimilarity(tokens, factTokens)
+      const containment = this.containmentScore(tokens, factTokens)
+      const score = Math.max(jaccard, containment)
+      if (score >= threshold && score > bestScore) {
+        bestMatch = fact
+        bestScore = score
+      }
     }
-    return null
+    return bestMatch
   }
 
   /** FTS5 全文搜索 */
@@ -264,6 +275,8 @@ export class MemoryStore {
         const entityId = this.resolveEntity(name)
         this.stmtInsertFactEntity.run(factId, entityId)
       }
+      // 清理因内容变更而产生的孤立实体
+      this.cleanOrphanEntities()
     }
 
     return true
@@ -275,6 +288,7 @@ export class MemoryStore {
     if (!row) return false
     this.stmtDeleteFactEntities.run(factId)
     this.db.prepare('DELETE FROM facts WHERE fact_id = ?').run(factId)
+    this.cleanOrphanEntities()
     return true
   }
 
@@ -403,16 +417,16 @@ export class MemoryStore {
     return this.db
   }
 
-  /** 语义去重：查找 Jaccard >= 0.7 的相似事实 */
+  /** 语义去重：查找 Jaccard >= 0.4 的相似事实（用于内部检查） */
   private findSimilar(content: string, category: FactCategory): Fact | null {
     const tokens = this.tokenizeForDedup(content)
-    if (tokens.size < 3) return null // 太短不检查
+    if (tokens.size < 3) return null
 
     const existing = this.listFacts(category, 0.0, 50)
     for (const fact of existing) {
       const factTokens = this.tokenizeForDedup(fact.content)
       const sim = this.jaccardSimilarity(tokens, factTokens)
-      if (sim >= 0.7) return fact
+      if (sim >= 0.4) return fact
     }
     return null
   }
@@ -446,6 +460,20 @@ export class MemoryStore {
     return unionSize > 0 ? intersection / unionSize : 0
   }
 
+  /** 包含率：短文本的 token 在长文本中出现的比例（双向取 max） */
+  private containmentScore(a: Set<string>, b: Set<string>): number {
+    if (a.size === 0 || b.size === 0) return 0
+    // a 包含在 b 中的比例
+    let aInB = 0
+    for (const item of a) if (b.has(item)) aInB++
+    const scoreA = aInB / a.size
+    // b 包含在 a 中的比例
+    let bInA = 0
+    for (const item of b) if (a.has(item)) bInA++
+    const scoreB = bInA / b.size
+    return Math.max(scoreA, scoreB)
+  }
+
   /** 将中文 bigram 追加到 tags，让 FTS5 能检索中文词组 */
   private enhanceTagsForChinese(content: string, tags: string): string {
     const bigrams: string[] = []
@@ -465,13 +493,24 @@ export class MemoryStore {
 
   /** 实体类型分类 */
   private classifyEntity(name: string): string {
-    // 纯中文 2-4 字 → person（可能是人名）
-    if (/^[\u4e00-\u9fff]{2,4}$/.test(name)) return 'person'
     // 含英文 → technology
     if (/[A-Za-z]/.test(name)) return 'technology'
+    // 中文 3-4 字常见人名模式 → person（2字太容易误判）
+    if (/^[\u4e00-\u9fff]{3,4}$/.test(name)) return 'person'
     // 中文 5+ 字 → topic
     if (/^[\u4e00-\u9fff·]{5,}$/.test(name)) return 'topic'
+    // 2字中文 → topic（如"模型"、"架构"等技术术语）
+    if (/^[\u4e00-\u9fff]{2}$/.test(name)) return 'topic'
     return 'unknown'
+  }
+
+  /** 清理没有关联任何事实的孤立实体 */
+  private cleanOrphanEntities(): void {
+    this.db.prepare(`
+      DELETE FROM entities WHERE entity_id NOT IN (
+        SELECT DISTINCT entity_id FROM fact_entities
+      )
+    `).run()
   }
 
   close(): void {
@@ -523,18 +562,15 @@ export class MemoryStore {
     // 中文实体：书名号
     for (const m of text.matchAll(RE_CN_BOOK)) add(m[1])
 
-    // 中文 bigram 关键词提取（2-4 字组合）
-    const cnChars = text.match(/[\u4e00-\u9fff]+/g) ?? []
-    for (const segment of cnChars) {
-      for (let len = 2; len <= Math.min(4, segment.length); len++) {
-        for (let i = 0; i <= segment.length - len; i++) {
-          const candidate = segment.slice(i, i + len)
-          if (!CN_STOP_WORDS.has(candidate)) {
-            add(candidate)
-          }
-        }
-      }
+    // 中文实体：常见声明模式（"我叫XXX"、"项目叫XXX"、"名字是XXX"）
+    const CN_NAME_DECL = /(?:我叫|叫|名字是|名称是|名叫|叫做)([^\s,，。！？；：]{2,10})/gi
+    for (const m of text.matchAll(CN_NAME_DECL)) {
+      const v = m[1].trim()
+      if (v.length >= 2 && v.length <= 8) add(v)
     }
+
+    // 注意：bigram 分词只用于 FTS5 tags 索引（enhanceTagsForChinese），
+    // 不作为实体存储。实体提取只取引号/书名号/声明模式中的明确实体。
 
     return result
   }
