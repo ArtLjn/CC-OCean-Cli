@@ -37,20 +37,24 @@ const outputSchema = lazySchema(() =>
 )
 type OutputSchema = ReturnType<typeof outputSchema>
 
-const DESCRIPTION = `结构化事实检索系统（SQLite+FTS5 索引）。
+const DESCRIPTION = `结构化事实记忆系统（SQLite+FTS5 索引）。支持读写。
 
 双层存储：
 - 全局库：用户偏好/工具信息（跨项目共享）
 - 项目库：项目知识（跟随项目）
 
-主要用途 — 检索已存储的事实：
+操作：
 - search — 关键词查找
 - probe — 实体探测：关于某人/某事的所有事实
 - related — 实体关联
 - reason — 组合推理：同时关联多个实体的事实
 - contradict — 矛盾检测
 - list — 浏览事实
-- add — 添加新事实（user_pref 存全局，project 存项目库）`
+- add — 添加新事实（自动去重，相似则更新）
+- update — 更新已有事实
+- remove — 删除事实
+
+写入时先 search 检查是否已存在相似事实。user_pref/tool/general → 全局库，project → 项目库。`
 
 export const FactStoreTool = buildTool({
   name: FACT_STORE_TOOL_NAME,

@@ -10,7 +10,7 @@
 
 <div align="center">
 
-[![License](https://img.shields.io/github/license/your-repo/ocean-cli)](LICENSE)
+[![License](https://img.shields.io/github/license/ArtLjn/ocean-cc-cli)](LICENSE)
 [![中文](https://img.shields.io/badge/🇨🇳_中文-当前-blue)](README.md)
 
 </div>
@@ -77,31 +77,13 @@ ocean --permission-mode auto
 
 ### 3. 双层记忆系统
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                      双层 SQLite 记忆架构                        │
-│                                                                 │
-│   全局库 (~/.claude/memory/facts.db)     项目库 (.claude/memory/) │
-│   ┌─────────────────────────────────┐   ┌────────────────────┐ │
-│   │ user_pref — 用户画像/偏好        │   │ project — 项目知识  │ │
-│   │ tool — 工具使用习惯              │   │ 架构决策/约定/依赖  │ │
-│   │ general — 通用事实               │   │ 跟随项目，天然隔离  │ │
-│   │ 跨项目共享，始终可见              │   │                    │ │
-│   └───────────────┬─────────────────┘   └─────────┬──────────┘ │
-│                   └──────────┬────────────────────┘            │
-│                              ▼                                  │
-│              extractMemories 自动提取（每轮后台 fork agent）       │
-│              → 按内容自动判定 category → 路由到对应库              │
-│              → 语义去重（Jaccard ≥ 0.6）→ 相似则更新             │
-│                              ▼                                  │
-│              AutoDream 定期清洗（矛盾检测/低信任清理/碎片合并）    │
-│                              ▼                                  │
-│              <memory-context> 围栏注入（同步 <10ms，无 API 调用） │
-└─────────────────────────────────────────────────────────────────┘
-```
+<p align="center">
+  <img src="./static/memory-arch.png" alt="双层记忆系统架构图" width="900">
+</p>
 
 **核心特性**：
 - **双层隔离** — 用户偏好全局共享，项目知识跟随项目，不串台
+- **自动提取** — 每轮对话结束，后台 fork agent 自动提取用户偏好、项目结构、技术栈等事实写入 SQLite
 - **FTS5 + 中文 bigram** — 写入时预分词，毫秒级本地检索，不依赖 API
 - **语义去重 + Upsert** — 相似事实自动合并更新，不会无限增长
 - **实体自动提取** — 中英文实体识别 + 自动分类（person/technology/topic）
@@ -116,6 +98,61 @@ ocean --permission-mode auto
 /mem search 关键词       # 搜索
 /mem rm mem_001         # 删除
 ```
+
+<details>
+<summary>SQLite 表结构详解</summary>
+
+每个数据库包含 3 张核心表 + 1 个 FTS5 虚拟表：
+
+**`facts` — 事实表**
+存储所有记忆事实，每条事实独立成行，支持信任评分和检索统计。
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `fact_id` | INTEGER PK | 自增主键 |
+| `content` | TEXT UNIQUE | 事实内容（唯一约束防重复） |
+| `category` | TEXT | 分类：user_pref / project / tool / general |
+| `tags` | TEXT | 逗号分隔标签（含中文 bigram 预分词结果） |
+| `trust_score` | REAL | 信任评分（0.0~1.0，默认 0.5） |
+| `retrieval_count` | INTEGER | 被检索次数 |
+| `helpful_count` | INTEGER | 被标记 helpful 次数 |
+| `created_at` | TEXT | 创建时间（UTC） |
+| `updated_at` | TEXT | 最后更新时间（UTC） |
+
+**`entities` — 实体表**
+自动从事实内容中提取的命名实体，支持别名和类型分类。
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `entity_id` | INTEGER PK | 自增主键 |
+| `name` | TEXT | 实体名称 |
+| `entity_type` | TEXT | 自动分类：person / technology / topic |
+| `aliases` | TEXT | 别名（逗号分隔） |
+| `created_at` | TEXT | 创建时间 |
+
+> **entity_type 分类规则**：纯中文 2-4 字 → person（可能是人名），含英文 → technology，中文 5+ 字 → topic
+
+**`fact_entities` — 事实-实体关联表**
+多对多关联，一条事实可关联多个实体，一个实体可被多条事实引用。CASCADE 删除保证一致性。
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `fact_id` | INTEGER FK | 关联 facts.fact_id |
+| `entity_id` | INTEGER FK | 关联 entities.entity_id |
+
+> 联合主键 `(fact_id, entity_id)`，INSERT OR IGNORE 防重复关联
+
+**`facts_fts` — FTS5 全文索引（虚拟表）**
+绑定 `facts` 表，通过触发器自动同步。支持中文 bigram 分词检索。
+
+| 字段 | 说明 |
+|------|------|
+| `content` | 同步自 facts.content |
+| `tags` | 同步自 facts.tags（含 bigram 预分词） |
+
+> 三个触发器（INSERT/UPDATE/DELETE）保证 FTS5 索引与 facts 表实时同步
+
+</details>
 
 ### 4. 多模型协作
 
@@ -269,6 +306,11 @@ ocean -p "your prompt"         # 无头模式
 
 ## 更新日志
 
+### v1.4.1
+- 修复自动记忆提取从未触发（绕过 tengu_passport_quail feature flag）
+- 放宽 extractMemories prompt：支持自动提取项目结构、技术栈、目录布局、构建配置
+- fact_store 工具 description 改为支持读写，引导 AI 主动存储项目知识
+
 ### v1.4.0
 - 双层 SQLite 记忆架构：全局库（user_pref/tool/general）+ 项目库（project）
 - 去掉 memdir markdown 文件写入，统一为纯 SQLite 存储
@@ -308,7 +350,7 @@ ocean -p "your prompt"         # 无头模式
 
 ## 许可证
 
-MIT License - 查看 [LICENSE](LICENSE) 了解详情
+[MIT License](LICENSE) © 2025 ArtLjn
 
 ---
 

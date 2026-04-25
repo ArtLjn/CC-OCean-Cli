@@ -23,19 +23,26 @@ import type { ToolSchema, ProviderContext, FactStoreArgs, FactFeedbackArgs, Fact
 
 const FACT_STORE_SCHEMA: ToolSchema = {
   name: 'fact_store',
-  description: `结构化事实记忆系统（SQLite+FTS5 索引）。数据来自 memdir 的自动同步。
+  description: `结构化事实记忆系统（SQLite+FTS5 索引）。支持读写。
 
-主要用途 — 检索已存储的事实：
+双层存储：
+- 全局库（user_pref/tool/general）：跨项目共享
+- 项目库（project）：跟随项目
+
+操作：
 - search — 关键词查找
 - probe — 实体探测：关于某人/某事的所有事实
 - related — 实体关联
 - reason — 组合推理：同时关联多个实体的事实
 - contradict — 矛盾检测
 - list — 浏览事实
+- add — 添加新事实（自动去重，相似则更新）
+- update — 更新已有事实
+- remove — 删除事实
 
 写入说明：
-- add/update/remove 仍可用，但用户画像和偏好应通过 memdir 的 memory 系统写入
-- memdir 写入会自动同步到此索引（onMemoryWrite 钩子）`,
+- 添加前先 search 检查是否已存在相似事实
+- user_pref/tool/general → 全局库，project → 项目库`,
   input_schema: {
     type: 'object',
     properties: {

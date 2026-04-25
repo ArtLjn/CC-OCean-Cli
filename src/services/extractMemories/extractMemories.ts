@@ -524,13 +524,8 @@ export function initExtractMemories(): void {
       return
     }
 
-    if (!getFeatureValue_CACHED_MAY_BE_STALE('tengu_passport_quail', false)) {
-      if (process.env.USER_TYPE === 'ant' && !hasLoggedGateFailure) {
-        hasLoggedGateFailure = true
-        logEvent('tengu_extract_memories_gate_disabled', {})
-      }
-      return
-    }
+    // Ocean CLI: 始终启用自动记忆提取，不依赖 Anthropic GrowthBook feature flag
+    // 原始门控: getFeatureValue_CACHED_MAY_BE_STALE('tengu_passport_quail', false)
 
     // Check auto-memory is enabled
     if (!isAutoMemoryEnabled()) {
