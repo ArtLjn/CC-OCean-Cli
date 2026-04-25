@@ -21,6 +21,21 @@ const UNHELPFUL_DELTA = -0.10
 const TRUST_MIN = 0.0
 const TRUST_MAX = 1.0
 
+// 检索刷新信任提升
+const RETRIEVAL_TRUST_BOOST = 0.01
+
+// 信任衰减配置：每个 category 的宽限期和衰减速率
+const DECAY_CONFIG: Record<string, { graceDays: number; decayPerWeek: number }> = {
+  identity:     { graceDays: 60, decayPerWeek: 0.02 }, // 身份信息稳定
+  coding_style: { graceDays: 30, decayPerWeek: 0.03 }, // 编码习惯渐变
+  tool_pref:    { graceDays: 30, decayPerWeek: 0.03 }, // 工具偏好渐变
+  workflow:     { graceDays: 45, decayPerWeek: 0.02 }, // 工作流较稳定
+  project:      { graceDays: 30, decayPerWeek: 0.05 }, // 项目知识：开发中自动续命，停工后30天开始衰减
+  general:      { graceDays: 30, decayPerWeek: 0.03 }, // 通用中等
+}
+const DEFAULT_DECAY = DECAY_CONFIG.general
+const MIN_SURVIVAL_TRUST = 0.1
+
 // 实体提取正则
 const RE_CAPITALIZED = /\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\b/g
 const RE_DOUBLE_QUOTE = /"([^"]+)"/g
@@ -217,13 +232,20 @@ export class MemoryStore {
     const rows = stmt.all(...params) as FactRow[]
     const results = rows.map(r => this.rowToFact(r))
 
-    // 递增检索计数
+    // 递增检索计数 + 主动刷新（top3 信任提升 + 时间戳重置）
     if (results.length > 0) {
       const ids = results.map(r => r.factId)
       const placeholders = ids.map(() => '?').join(',')
       this.db.prepare(
         `UPDATE facts SET retrieval_count = retrieval_count + 1 WHERE fact_id IN (${placeholders})`
       ).run(...ids)
+      // 检索刷新：top3 结果获得小信任提升并重置 updated_at（重置衰减时钟）
+      const topN = results.slice(0, 3)
+      for (const r of topN) {
+        this.db.prepare(
+          `UPDATE facts SET trust_score = MIN(1.0, trust_score + ?), updated_at = datetime('now') WHERE fact_id = ?`
+        ).run(RETRIEVAL_TRUST_BOOST, r.factId)
+      }
     }
 
     return results
@@ -404,6 +426,181 @@ export class MemoryStore {
   getEntitiesForFact(factId: number): string[] {
     const rows = this.stmtGetEntitiesForFact.all(factId) as Pick<EntityRow, 'name'>[]
     return rows.map(r => r.name)
+  }
+
+  /**
+   * 信任衰减：按 category 宽限期 + 衰减率处理过期事实。
+   * 超过宽限期的事实，trust_score 每周衰减 decayPerWeek。
+   * trust_score < MIN_SURVIVAL_TRUST 的自动删除。
+   * @returns { decayed: number, removed: number }
+   */
+  decayTrustScores(): { decayed: number; removed: number } {
+    const now = Date.now()
+    const rows = this.db.prepare(
+      'SELECT fact_id, category, trust_score, updated_at FROM facts'
+    ).all() as Array<{ fact_id: number; category: string; trust_score: number; updated_at: string }>
+
+    let decayed = 0
+    let removed = 0
+
+    for (const row of rows) {
+      const config = DECAY_CONFIG[row.category] ?? DEFAULT_DECAY
+      const updatedDate = new Date(row.updated_at + 'Z')
+      const ageDays = (now - updatedDate.getTime()) / 86_400_000
+
+      if (ageDays <= config.graceDays) continue
+
+      const decayWeeks = (ageDays - config.graceDays) / 7
+      const newTrust = clampTrust(row.trust_score - config.decayPerWeek * decayWeeks)
+
+      if (newTrust <= MIN_SURVIVAL_TRUST) {
+        this.removeFact(row.fact_id)
+        removed++
+      } else if (newTrust < row.trust_score) {
+        this.db.prepare('UPDATE facts SET trust_score = ? WHERE fact_id = ?').run(newTrust, row.fact_id)
+        decayed++
+      }
+    }
+
+    return { decayed, removed }
+  }
+
+  /**
+   * 矛盾降权：新事实添加后，查找同 category 中共享实体但内容冲突的旧事实，降低其 trust。
+   * 用于自动处理需求变更（如"用Express"改成"用Fastify"）。
+   * @returns 被降权的事实数量
+   */
+  demoteContradictingFacts(newFactId: number, newContent: string, category: FactCategory): number {
+    const entities = this.getEntitiesForFact(newFactId)
+    if (entities.length === 0) return 0
+
+    // 查找同 category 中共享实体的其他事实
+    const entityPlaceholders = entities.map(() => '?').join(',')
+    const rows = this.db.prepare(`
+      SELECT DISTINCT f.fact_id, f.content
+      FROM facts f
+      JOIN fact_entities fe ON f.fact_id = fe.fact_id
+      JOIN entities e ON fe.entity_id = e.entity_id
+      WHERE e.name IN (${entityPlaceholders})
+        AND f.category = ?
+        AND f.fact_id != ?
+    `).all(...entities, category, newFactId) as Array<{ fact_id: number; content: string }>
+
+    if (rows.length === 0) return 0
+
+    const newTokens = this.tokenizeForDedup(newContent)
+    let demoted = 0
+
+    for (const row of rows) {
+      const oldTokens = this.tokenizeForDedup(row.content)
+      const jaccard = this.jaccardSimilarity(newTokens, oldTokens)
+      // 高实体重叠 + 低内容相似度 = 矛盾/需求变更信号
+      // Jaccard < 0.3 排除"补充性"事实（如"喜欢Python"和"也喜欢Go"）
+      if (jaccard < 0.3) {
+        this.db.prepare(
+          'UPDATE facts SET trust_score = MAX(0, trust_score - 0.10) WHERE fact_id = ?'
+        ).run(row.fact_id)
+        demoted++
+      }
+    }
+    return demoted
+  }
+
+  /**
+   * 启动时矛盾审计：扫描所有事实对，找到共享实体但内容冲突的，
+   * 保留较新的，降权较旧的。每次 session 启动必然执行，不依赖写入触发。
+   * @returns { audited: number, demoted: number }
+   */
+  auditContradictions(): { audited: number; demoted: number } {
+    const rows = this.db.prepare(`
+      SELECT f1.fact_id as id1, f1.content as c1, f1.updated_at as t1,
+             f2.fact_id as id2, f2.content as c2, f2.updated_at as t2
+      FROM facts f1
+      JOIN fact_entities fe1 ON f1.fact_id = fe1.fact_id
+      JOIN entities e ON fe1.entity_id = e.entity_id
+      JOIN fact_entities fe2 ON e.entity_id = fe2.entity_id
+      JOIN facts f2 ON fe2.fact_id = f2.fact_id
+      WHERE f1.fact_id < f2.fact_id
+        AND f1.category = f2.category
+        AND f1.trust_score >= 0.2
+        AND f2.trust_score >= 0.2
+      GROUP BY f1.fact_id, f2.fact_id
+    `).all() as Array<{ id1: number; c1: string; t1: string; id2: number; c2: string; t2: string }>
+
+    let demoted = 0
+    const alreadyDemoted = new Set<number>()
+
+    for (const row of rows) {
+      const tokens1 = this.tokenizeForDedup(row.c1)
+      const tokens2 = this.tokenizeForDedup(row.c2)
+      const jaccard = this.jaccardSimilarity(tokens1, tokens2)
+
+      // 低内容相似度 = 可能矛盾，降权较旧的那个
+      if (jaccard < 0.3) {
+        const older = row.t1 < row.t2 ? row.id1 : row.id2
+        if (!alreadyDemoted.has(older)) {
+          this.db.prepare(
+            'UPDATE facts SET trust_score = MAX(0, trust_score - 0.10) WHERE fact_id = ?'
+          ).run(older)
+          alreadyDemoted.add(older)
+          demoted++
+        }
+      }
+    }
+
+    return { audited: rows.length, demoted }
+  }
+
+  /**
+   * 项目活跃续命：重置所有 project category 事实的 updated_at。
+   * 用户在本项目启动 ocean = 项目正在开发，project 事实不应衰减。
+   * 项目完成后不再启动 = 自然衰减 + 自动清理。
+   */
+  refreshProjectFacts(): void {
+    this.db.prepare(
+      `UPDATE facts SET updated_at = datetime('now') WHERE category = 'project'`
+    ).run()
+  }
+
+  // ------------------------------------------------------------------
+  // 文档索引
+  // ------------------------------------------------------------------
+
+  /** 获取所有已索引的文档 */
+  listDocIndex(): Array<{ filePath: string; summary: string; conclusions: string; mtimeMs: number }> {
+    const rows = this.db.prepare(
+      'SELECT file_path, summary, conclusions, mtime_ms FROM doc_index ORDER BY file_path'
+    ).all() as Array<{ file_path: string; summary: string; conclusions: string; mtime_ms: number }>
+    return rows.map(r => ({
+      filePath: r.file_path,
+      summary: r.summary,
+      conclusions: r.conclusions,
+      mtimeMs: r.mtime_ms,
+    }))
+  }
+
+  /** 更新或插入文档索引 */
+  upsertDocIndex(filePath: string, summary: string, conclusions: string, mtimeMs: number): void {
+    this.db.prepare(`
+      INSERT INTO doc_index (file_path, summary, conclusions, mtime_ms, updated_at)
+      VALUES (?, ?, ?, ?, datetime('now'))
+      ON CONFLICT(file_path) DO UPDATE SET
+        summary = excluded.summary,
+        conclusions = excluded.conclusions,
+        mtime_ms = excluded.mtime_ms,
+        updated_at = datetime('now')
+    `).run(filePath, summary, conclusions, mtimeMs)
+  }
+
+  /** 删除已不存在的文档索引（清理） */
+  removeDocIndex(filePath: string): void {
+    this.db.prepare('DELETE FROM doc_index WHERE file_path = ?').run(filePath)
+  }
+
+  /** 获取文档索引总数 */
+  getDocIndexCount(): number {
+    const row = this.db.prepare('SELECT COUNT(*) as count FROM doc_index').get() as { count: number }
+    return row.count
   }
 
   /** 获取事实总数 */

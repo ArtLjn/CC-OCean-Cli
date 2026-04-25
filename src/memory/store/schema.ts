@@ -40,6 +40,15 @@ CREATE INDEX IF NOT EXISTS idx_facts_category ON facts(category);
 CREATE INDEX IF NOT EXISTS idx_entities_name  ON entities(name);
 CREATE INDEX IF NOT EXISTS idx_fact_entities_entity ON fact_entities(entity_id);
 
+-- 文档索引表：跟踪项目文档的摘要和修改时间
+CREATE TABLE IF NOT EXISTS doc_index (
+  file_path   TEXT PRIMARY KEY,
+  summary     TEXT NOT NULL DEFAULT '',
+  conclusions TEXT NOT NULL DEFAULT '',
+  mtime_ms    INTEGER NOT NULL DEFAULT 0,
+  updated_at  TEXT DEFAULT (datetime('now'))
+);
+
 -- FTS5 全文索引（content= 绑定 facts 表）
 CREATE VIRTUAL TABLE IF NOT EXISTS facts_fts
   USING fts5(content, tags, content=facts, content_rowid=fact_id);

@@ -8,11 +8,12 @@
  * - identity / workflow → 始终注入 system prompt
  * - coding_style → 按项目技术栈匹配注入
  * - tool_pref / general / project → prefetch 检索注入
+ * - 项目概览（一条 project 事实，tags 含 "project_overview"）→ 始终注入
  */
 
-import { join } from 'node:path'
+import { join, relative } from 'node:path'
 import { homedir } from 'node:os'
-import { existsSync } from 'node:fs'
+import { existsSync, statSync, readdirSync } from 'node:fs'
 import { MemoryProvider } from '../MemoryProvider'
 import { MemoryStore } from '../store/MemoryStore'
 import { FactRetriever } from '../store/FactRetriever'
@@ -96,6 +97,9 @@ const MIGRATION_RULES: Array<{ from: string; to: FactCategory; keywords: string[
   },
 ]
 
+/** 项目概览标签，用于标记和检索概览事实 */
+const OVERVIEW_TAG = 'project_overview'
+
 export class HolographicProvider extends MemoryProvider {
   private globalStore: MemoryStore | null = null
   private projectStore: MemoryStore | null = null
@@ -103,6 +107,7 @@ export class HolographicProvider extends MemoryProvider {
   private projectRetriever: FactRetriever | null = null
   private minTrust = 0.3
   private projectRoot = ''
+  private overviewNeedsUpdate = false
 
   get name(): string {
     return 'holographic'
@@ -117,13 +122,27 @@ export class HolographicProvider extends MemoryProvider {
     const globalHome = process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude')
     const globalDbPath = join(globalHome, 'memory', 'facts.db')
     this.globalStore = new MemoryStore(globalDbPath)
-    this.globalRetriever = new FactRetriever(this.globalStore)
+    this.globalRetriever = new FactRetriever(this.globalStore, { temporalDecayHalfLife: 30 })
 
     // 项目数据库
     this.projectRoot = ctx.projectRoot
     const projectDbPath = join(ctx.projectRoot, '.claude', 'memory', 'facts.db')
     this.projectStore = new MemoryStore(projectDbPath)
-    this.projectRetriever = new FactRetriever(this.projectStore)
+    this.projectRetriever = new FactRetriever(this.projectStore, { temporalDecayHalfLife: 30 })
+
+    // 信任衰减：session 启动时清理过期事实
+    this.globalStore.decayTrustScores()
+    this.projectStore.decayTrustScores()
+
+    // 启动时矛盾审计：不依赖写入触发，每次启动必然扫描
+    this.globalStore.auditContradictions()
+    this.projectStore.auditContradictions()
+
+    // 项目活跃续命：用户在本项目启动 = 项目正在开发
+    this.projectStore.refreshProjectFacts()
+
+    // 检测文档变更，标记概览是否需要更新
+    this.overviewNeedsUpdate = this.checkDocsChanged()
 
     // 一次性迁移旧 category 数据
     this.migrateLegacyCategories()
@@ -183,6 +202,87 @@ export class HolographicProvider extends MemoryProvider {
     return null
   }
 
+  // ------------------------------------------------------------------
+  // 项目概览：一条 project 事实，tags 含 project_overview
+  // ------------------------------------------------------------------
+
+  /** 获取项目概览事实 */
+  private getProjectOverview(): string | null {
+    const facts = this.projectStore?.listFacts('project', 0.0, 50) ?? []
+    const overview = facts.find(f => f.tags.includes(OVERVIEW_TAG))
+    return overview?.content ?? null
+  }
+
+  /** 检测项目文档是否变更（mtime 比对） */
+  private checkDocsChanged(): boolean {
+    const overview = this.projectStore?.listFacts('project', 0.0, 50)
+      ?.find(f => f.tags.includes(OVERVIEW_TAG))
+    if (!overview) {
+      // 没有概览，检查项目是否有文档
+      return this.scanProjectDocs().length > 0
+    }
+
+    // 有概览，检查文档 mtime 是否比概览更新
+    const overviewTime = new Date(overview.updatedAt + 'Z').getTime()
+    const docs = this.scanProjectDocs()
+    for (const doc of docs) {
+      if (doc.mtimeMs > overviewTime) return true
+    }
+    return false
+  }
+
+  /** 扫描项目文档目录 */
+  private static readonly DOC_DIRS = ['docs', 'doc', 'documentation', 'design', 'arch']
+
+  private scanProjectDocs(): Array<{ filePath: string; mtimeMs: number }> {
+    const root = this.projectRoot
+    const results: Array<{ filePath: string; mtimeMs: number }> = []
+
+    for (const dir of HolographicProvider.DOC_DIRS) {
+      const fullDir = join(root, dir)
+      if (existsSync(fullDir)) {
+        this.collectMdFiles(fullDir, root, results)
+      }
+    }
+
+    return results
+  }
+
+  private collectMdFiles(
+    dir: string,
+    root: string,
+    results: Array<{ filePath: string; mtimeMs: number }>,
+    depth = 0,
+  ): void {
+    if (depth > 5) return
+    const EXCLUDE = new Set(['node_modules', '.git', '.claude', 'dist', 'build', '__pycache__', 'venv'])
+
+    let entries
+    try {
+      entries = readdirSync(dir, { withFileTypes: true })
+    } catch { return }
+
+    for (const entry of entries) {
+      if (EXCLUDE.has(entry.name)) continue
+      const fullPath = join(dir, entry.name)
+      if (entry.isDirectory()) {
+        this.collectMdFiles(fullPath, root, results, depth + 1)
+      } else if (entry.name.endsWith('.md')) {
+        try {
+          const stat = statSync(fullPath)
+          results.push({
+            filePath: relative(root, fullPath),
+            mtimeMs: stat.mtimeMs,
+          })
+        } catch { /* ignore */ }
+      }
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // System prompt 注入
+  // ------------------------------------------------------------------
+
   systemPromptBlock(): string {
     const globalCount = this.globalStore?.getTotalCount() ?? 0
     const projectCount = this.projectStore?.getTotalCount() ?? 0
@@ -194,18 +294,21 @@ export class HolographicProvider extends MemoryProvider {
     let block = '# 结构化记忆\n'
     if (globalCount > 0) block += `全局事实库 ${globalCount} 条。`
     if (projectCount > 0) block += `项目事实库 ${projectCount} 条。`
-    block += '\n\n**读取**：回答关于用户、项目、技术栈的问题时，先查 fact_store 再读文件。'
+    block += '\n\n**读取优先级**：'
+    block += '\n- 用户身份/偏好/习惯 → 查 fact_store（文件里没有）'
+    block += '\n- 决策背景/团队约定/隐性知识 → 查 fact_store（文件里没有）'
     block += '\n**写入**：当用户说"记住"、"记下来"、"以后记住"时，必须立即用 fact_store 保存。'
     block += '\n- 先 search 检查是否已有相似事实，有则 update，无则 add。'
     block += '\n- update 时必须保留旧事实中的所有有效信息，只修改变化的部分。'
     block += '\n  例如：用户说"改名叫柳叶眉"，旧事实是"AI角色叫暖暖，身份是编程女朋友，回答风格要亲昵..."'
     block += '\n  → update 为"AI角色叫柳叶眉，身份是编程女朋友，回答风格要亲昵..."，只改名，不丢其他信息。'
 
-    // 层 1：identity 始终注入
+    // 层 1：identity 始终注入（包含 AI 角色设定和用户信息）
     const identityFacts = this.globalStore?.listFacts('identity', 0.0, 20) ?? []
     if (identityFacts.length > 0) {
-      block += '\n\n## 用户信息\n'
+      block += '\n\n## 角色与身份设定（必须遵守）\n'
       block += identityFacts.map(f => `- ${f.content}`).join('\n')
+      block += '\n\n当用户问"你是谁"时，必须按照以上设定回答，不要自称"Ocean CLI"或其他默认身份。'
     }
 
     // 层 2：workflow 始终注入
@@ -229,7 +332,24 @@ export class HolographicProvider extends MemoryProvider {
           block += matched.map(f => `- ${f.content}`).join('\n')
         }
       }
-      // 无技术栈匹配时不注入编码习惯，走 prefetch
+    }
+
+    // 层 4：项目概览（一条事实，始终注入）
+    const overview = this.getProjectOverview()
+    if (overview) {
+      block += '\n\n## 项目概览\n'
+      block += overview
+    }
+
+    // 概览需要更新或首次生成：提示 AI 扫描文档
+    if (this.overviewNeedsUpdate && !overview) {
+      block += '\n\n## ⚠️ 项目文档未索引'
+      block += '\n检测到项目有文档目录但尚未生成项目概览。请在合适时机扫描项目文档（docs/、design/、arch/ 等），'
+      block += '提取出项目整体架构、方向、职责边界，存为一条 project 事实：'
+      block += '\nfact_store(action="add", content="项目概览内容", category="project", tags="project_overview")'
+      block += '\n概览应包含：项目定位、整体架构、职责边界、当前阶段。不需要逐文档详细摘要，只需要全局视角。'
+    } else if (this.overviewNeedsUpdate) {
+      block += '\n\n> 注意：项目文档有变更，概览可能需要更新。请根据需要更新概览内容。'
     }
 
     return block
@@ -324,11 +444,24 @@ export class HolographicProvider extends MemoryProvider {
               tags: args.tags,
               trustDelta: 0.05,
             })
-            return JSON.stringify({ fact_id: similar.factId, status: 'updated', reason: 'similar_fact_merged' })
+            // 矛盾降权：同 category 共享实体但内容冲突的旧事实
+            const demoted = store.demoteContradictingFacts(similar.factId, args.content, resolvedCategory)
+            return JSON.stringify({
+              fact_id: similar.factId,
+              status: 'updated',
+              reason: 'similar_fact_merged',
+              ...(demoted > 0 ? { contradicted_demoted: demoted } : {}),
+            })
           }
 
           const factId = store.addFact(args.content, resolvedCategory, args.tags ?? '')
-          return JSON.stringify({ fact_id: factId, status: 'added' })
+          // 矛盾降权：新事实可能与旧事实冲突（需求变更）
+          const demoted = store.demoteContradictingFacts(factId, args.content, resolvedCategory)
+          return JSON.stringify({
+            fact_id: factId,
+            status: 'added',
+            ...(demoted > 0 ? { contradicted_demoted: demoted } : {}),
+          })
         }
 
         case 'search': {
