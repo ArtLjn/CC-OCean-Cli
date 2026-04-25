@@ -1,12 +1,8 @@
 /**
  * Prompt templates for the background memory extraction agent.
  *
- * The extraction agent runs as a perfect fork of the main conversation — same
- * system prompt, same message prefix. The main agent's system prompt always
- * has full save instructions; when the main agent writes memories itself,
- * extractMemories.ts skips that turn (hasMemoryWritesSince). This prompt
- * fires only when the main agent didn't write, so the save-criteria here
- * overlap the system prompt's harmlessly.
+ * SQLite-only: forked agent writes structured facts via fact_store tool.
+ * No longer writes markdown files to memdir.
  */
 
 import { feature } from 'bun:bundle'
@@ -17,97 +13,25 @@ import {
   WHAT_NOT_TO_SAVE_SECTION,
 } from '../../memdir/memoryTypes.js'
 import { BASH_TOOL_NAME } from '../../tools/BashTool/toolName.js'
-import { FILE_EDIT_TOOL_NAME } from '../../tools/FileEditTool/constants.js'
 import { FILE_READ_TOOL_NAME } from '../../tools/FileReadTool/prompt.js'
-import { FILE_WRITE_TOOL_NAME } from '../../tools/FileWriteTool/prompt.js'
-import { GLOB_TOOL_NAME } from '../../tools/GlobTool/prompt.js'
 import { GREP_TOOL_NAME } from '../../tools/GrepTool/prompt.js'
+import { GLOB_TOOL_NAME } from '../../tools/GlobTool/prompt.js'
 
 /**
- * Shared opener for both extract-prompt variants.
- */
-function opener(newMessageCount: number, existingMemories: string): string {
-  const manifest =
-    existingMemories.length > 0
-      ? `\n\n## Existing memory files\n\n${existingMemories}\n\nCheck this list before writing — update an existing file rather than creating a duplicate.`
-      : ''
-  return [
-    `You are now acting as the memory extraction subagent. Analyze the most recent ~${newMessageCount} messages above and use them to update your persistent memory systems.`,
-    '',
-    `Available tools: ${FILE_READ_TOOL_NAME}, ${GREP_TOOL_NAME}, ${GLOB_TOOL_NAME}, read-only ${BASH_TOOL_NAME} (ls/find/cat/stat/wc/head/tail and similar), ${FILE_EDIT_TOOL_NAME}/${FILE_WRITE_TOOL_NAME} for paths inside the memory directory only, and fact_store for structured fact storage. ${BASH_TOOL_NAME} rm is not permitted. All other tools — MCP, Agent, write-capable ${BASH_TOOL_NAME}, etc — will be denied.`,
-    '',
-    `You have a limited turn budget. ${FILE_EDIT_TOOL_NAME} requires a prior ${FILE_READ_TOOL_NAME} of the same file, so the efficient strategy is: turn 1 — issue all ${FILE_READ_TOOL_NAME} calls in parallel for every file you might update; turn 2 — issue all ${FILE_WRITE_TOOL_NAME}/${FILE_EDIT_TOOL_NAME} calls in parallel. Do not interleave reads and writes across multiple turns.`,
-    '',
-    `You MUST only use content from the last ~${newMessageCount} messages to update your persistent memories. Do not waste any turns attempting to investigate or verify that content further — no grepping source files, no reading code to confirm a pattern exists, no git commands.` +
-      manifest,
-  ].join('\n')
-}
-
-/**
- * Build the extraction prompt for auto-only memory (no team memory).
- * Four-type taxonomy, no scope guidance (single directory).
+ * Build the extraction prompt for SQLite-only memory storage.
+ * No memdir file writes — all facts go through fact_store.
  */
 export function buildExtractAutoOnlyPrompt(
   newMessageCount: number,
-  existingMemories: string,
-  skipIndex = false,
+  _existingMemories: string,
+  _skipIndex = false,
 ): string {
-  const howToSave = skipIndex
-    ? [
-        '## How to save memories',
-        '',
-        'Write each memory to its own file (e.g., `user_role.md`, `feedback_testing.md`) using this frontmatter format:',
-        '',
-        ...MEMORY_FRONTMATTER_EXAMPLE,
-        '',
-        '- Organize memory semantically by topic, not chronologically',
-        '- Update or remove memories that turn out to be wrong or outdated',
-        '- Do not write duplicate memories. First check if there is an existing memory you can update before writing a new one.',
-      ]
-    : [
-        '## How to save memories',
-        '',
-        'Saving a memory is a two-step process:',
-        '',
-        '**Step 1** — write the memory to its own file (e.g., `user_role.md`, `feedback_testing.md`) using this frontmatter format:',
-        '',
-        ...MEMORY_FRONTMATTER_EXAMPLE,
-        '',
-        '**Step 2** — add a pointer to that file in `MEMORY.md`. `MEMORY.md` is an index, not a memory — each entry should be one line, under ~150 characters: `- [Title](file.md) — one-line hook`. It has no frontmatter. Never write memory content directly into `MEMORY.md`.',
-        '',
-        '- `MEMORY.md` is always loaded into your system prompt — lines after 200 will be truncated, so keep the index concise',
-        '- Organize memory semantically by topic, not chronologically',
-        '- Update or remove memories that turn out to be wrong or outdated',
-        '- Do not write duplicate memories. First check if there is an existing memory you can update before writing a new one.',
-      ]
-
-  return [
-    opener(newMessageCount, existingMemories),
-    '',
-    'If the user explicitly asks you to remember something, save it immediately as whichever type fits best. If they ask you to forget something, find and remove the relevant entry.',
-    '',
-    ...TYPES_SECTION_INDIVIDUAL,
-    ...WHAT_NOT_TO_SAVE_SECTION,
-    '',
-    ...howToSave,
-    '',
-    '## Structured facts (fact_store)',
-    '',
-    'For personal facts about the user (name, role, preferences, relationships), also save to fact_store:',
-    '',
-    '- `fact_store(action="add", content="...", category="user_pref", tags="...")` for user preferences and identity',
-    '- `fact_store(action="add", content="...", category="project", tags="...")` for project decisions and architecture',
-    '- `fact_store(action="add", content="...", category="tool", tags="...")` for tool knowledge and conventions',
-    '- Use `fact_store(action="search", query="...")` to check for existing facts before adding duplicates',
-    '',
-    'Example: user says "记住我叫暖暖" → write to both memory file AND `fact_store(action="add", content="用户名叫暖暖", category="user_pref", tags="name")`',
-  ].join('\n')
+  return buildExtractSQLiteOnlyPrompt(newMessageCount)
 }
 
 /**
  * Build the extraction prompt for combined auto + team memory.
- * Four-type taxonomy with per-type <scope> guidance (directory choice
- * is baked into each type block, no separate routing section needed).
+ * Falls through to SQLite-only prompt.
  */
 export function buildExtractCombinedPrompt(
   newMessageCount: number,
@@ -121,54 +45,67 @@ export function buildExtractCombinedPrompt(
       skipIndex,
     )
   }
+  return buildExtractSQLiteOnlyPrompt(newMessageCount)
+}
 
-  const howToSave = skipIndex
-    ? [
-        '## How to save memories',
-        '',
-        "Write each memory to its own file in the chosen directory (private or team, per the type's scope guidance) using this frontmatter format:",
-        '',
-        ...MEMORY_FRONTMATTER_EXAMPLE,
-        '',
-        '- Organize memory semantically by topic, not chronologically',
-        '- Update or remove memories that turn out to be wrong or outdated',
-        '- Do not write duplicate memories. First check if there is an existing memory you can update before writing a new one.',
-      ]
-    : [
-        '## How to save memories',
-        '',
-        'Saving a memory is a two-step process:',
-        '',
-        "**Step 1** — write the memory to its own file in the chosen directory (private or team, per the type's scope guidance) using this frontmatter format:",
-        '',
-        ...MEMORY_FRONTMATTER_EXAMPLE,
-        '',
-        "**Step 2** — add a pointer to that file in the same directory's `MEMORY.md`. Each directory (private and team) has its own `MEMORY.md` index — each entry should be one line, under ~150 characters: `- [Title](file.md) — one-line hook`. They have no frontmatter. Never write memory content directly into a `MEMORY.md`.",
-        '',
-        '- Both `MEMORY.md` indexes are loaded into your system prompt — lines after 200 will be truncated, so keep them concise',
-        '- Organize memory semantically by topic, not chronologically',
-        '- Update or remove memories that turn out to be wrong or outdated',
-        '- Do not write duplicate memories. First check if there is an existing memory you can update before writing a new one.',
-      ]
-
+/**
+ * SQLite-only extraction prompt.
+ * Forked agent uses fact_store to write structured facts.
+ */
+function buildExtractSQLiteOnlyPrompt(newMessageCount: number): string {
   return [
-    opener(newMessageCount, existingMemories),
+    `You are the memory extraction subagent. Analyze the most recent ~${newMessageCount} messages and extract durable facts into the structured memory system.`,
     '',
-    'If the user explicitly asks you to remember something, save it immediately as whichever type fits best. If they ask you to forget something, find and remove the relevant entry.',
+    `## Available tools`,
     '',
-    ...TYPES_SECTION_COMBINED,
-    ...WHAT_NOT_TO_SAVE_SECTION,
-    '- You MUST avoid saving sensitive data within shared team memories. For example, never save API keys or user credentials.',
+    `- ${FILE_READ_TOOL_NAME}, ${GREP_TOOL_NAME}, ${GLOB_TOOL_NAME} — read-only file access`,
+    `- ${BASH_TOOL_NAME} — read-only commands only (ls/find/cat/stat/wc/head/tail)`,
+    `- fact_store — structured fact storage (SQLite + FTS5)`,
+    `- fact_feedback — rate fact accuracy`,
     '',
-    ...howToSave,
+    `All other tools are denied. You have a limited turn budget — be efficient.`,
     '',
-    '## Structured facts (fact_store)',
+    `## What to extract`,
     '',
-    'For personal facts about the user (name, role, preferences, relationships), also save to fact_store:',
+    `### User preferences (→ category="user_pref")`,
+    `- User's name, role, goals, expertise level`,
+    `- Communication style preferences`,
+    `- Tool/framework preferences`,
+    `- Workflow habits`,
     '',
-    '- `fact_store(action="add", content="...", category="user_pref", tags="...")` for user preferences and identity',
-    '- `fact_store(action="add", content="...", category="project", tags="...")` for project decisions and architecture',
-    '- `fact_store(action="add", content="...", category="tool", tags="...")` for tool knowledge and conventions',
-    '- Use `fact_store(action="search", query="...")` to check for existing facts before adding duplicates',
+    `### Project knowledge (→ category="project")`,
+    `- Architecture decisions and their rationale`,
+    `- Project-specific conventions or constraints`,
+    `- Key dependencies or integration patterns`,
+    `- Non-obvious project facts not derivable from code`,
+    '',
+    `### Tool usage patterns (→ category="tool")`,
+    `- Preferred tools and configurations`,
+    '',
+    `### DO NOT extract`,
+    `- Code patterns, file paths, or project structure`,
+    `- Git history or recent changes`,
+    `- Debugging solutions or fix recipes`,
+    `- Anything already in CLAUDE.md files`,
+    `- Ephemeral task details`,
+    '',
+    `## How to save`,
+    '',
+    `1. **Search first**: fact_store(action="search", query="...") to check for existing similar facts`,
+    `2. **Update if exists**: fact_store(action="update", fact_id=..., content="...") to revise`,
+    `3. **Add if new**:`,
+    `   - User preferences: fact_store(action="add", content="...", category="user_pref", tags="...")`,
+    `   - Project facts: fact_store(action="add", content="...", category="project", tags="...")`,
+    `   - Tool info: fact_store(action="add", content="...", category="tool", tags="...")`,
+    '',
+    `## Guidelines`,
+    '',
+    `- Extract **facts**, not raw messages. Summarize and decontextualize.`,
+    `- Convert relative dates to absolute dates.`,
+    `- Use concise, self-contained statements (one fact per entry).`,
+    `- Add relevant tags (comma-separated) for entity discovery.`,
+    `- **Check for duplicates before adding** — search first.`,
+    `- If nothing worth remembering, do nothing (no-op is fine).`,
+    '- Do NOT write any files. Only use fact_store.',
   ].join('\n')
 }

@@ -277,8 +277,26 @@ export class FactRetriever {
     minTrust: number,
     limit: number,
   ): FtsCandidate[] {
-    // 将空格分隔的查询词用 OR 连接，提升召回率
-    const ftsQuery = query.split(/\s+/).filter(w => w.length > 0).join(' OR ')
+    // 将查询转为 FTS5 可匹配的形式：
+    // 1. 原始词用 OR 连接
+    // 2. 中文部分追加 bigram，提升中文搜索召回率
+    const parts = query.split(/\s+/).filter(w => w.length > 0)
+    const ftsParts: string[] = []
+
+    for (const word of parts) {
+      ftsParts.push(`"${word}"`)
+      // 对中文部分追加 bigram
+      const cnChars = word.match(/[\u4e00-\u9fff]+/g)
+      if (cnChars) {
+        for (const seg of cnChars) {
+          for (let i = 0; i < seg.length - 1; i++) {
+            ftsParts.push(seg.slice(i, i + 2))
+          }
+        }
+      }
+    }
+
+    const ftsQuery = ftsParts.join(' OR ')
     if (!ftsQuery) return []
 
     const params: unknown[] = [ftsQuery, minTrust]
@@ -369,17 +387,18 @@ export class FactRetriever {
   /** 判断查询是否为个人/身份相关（应触发 trust fallback） */
   private isPersonalQuery(query: string): boolean {
     const q = query.trim().toLowerCase()
-    // 短查询（<=10字）+ 包含个人/身份关键词
-    if (q.length > 10) return false
-    const PERSONAL_KEYWORDS = [
-      // 中文
-      '你是谁', '我是谁', '我叫', '名字', '认识', '知道我', '我的',
-      '记住', '记得', '暖暖', '关于我', '我喜欢', '我偏好',
-      // 英文
-      'who are you', 'who am i', 'my name', 'remember me', 'about me',
-      'my preference', 'i prefer', 'i like',
+    // 短查询（<=20字）+ 包含个人/身份关键词
+    if (q.length > 20) return false
+
+    // 通用身份/关于用户的查询模式
+    const patterns = [
+      /你(是谁|叫什么|的名字|的身份)/,
+      /我(是谁|叫什么|的名字|的身份|喜欢|偏好|习惯)/,
+      /(认识|记得|记住|知道).{0,4}(我|你)/,
+      /(名字|身份|称呼|角色|profile)/,
+      /(who are you|who am i|my name|about me|my role|call me|remember me)/i,
     ]
-    return PERSONAL_KEYWORDS.some(kw => q.includes(kw))
+    return patterns.some(p => p.test(q))
   }
 
   /** Trust fallback — 查询无法匹配任何事实时，按信任评分返回 top-N */

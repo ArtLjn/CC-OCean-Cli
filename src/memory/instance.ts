@@ -4,7 +4,6 @@
  */
 
 import { MemoryManager } from './MemoryManager'
-import { BuiltinMemoryProvider } from './providers/BuiltinMemoryProvider'
 import { HolographicProvider } from './providers/HolographicProvider'
 import type { ProviderContext } from './types'
 
@@ -18,7 +17,6 @@ export function getMemoryManager(ctx?: ProviderContext): MemoryManager | null {
 
   try {
     _instance = new MemoryManager()
-    _instance.addProvider(new BuiltinMemoryProvider())
 
     const holographic = new HolographicProvider()
     if (holographic.isAvailable()) {

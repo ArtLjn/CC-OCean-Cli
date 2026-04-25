@@ -417,91 +417,26 @@ export function buildSearchingPastContextSection(autoMemDir: string): string[] {
  * Returns null when auto memory is disabled.
  */
 export async function loadMemoryPrompt(): Promise<string | null> {
-  const autoEnabled = isAutoMemoryEnabled()
-
-  const skipIndex = getFeatureValue_CACHED_MAY_BE_STALE(
-    'tengu_moth_copse',
-    false,
-  )
-
-  // KAIROS daily-log mode takes precedence over TEAMMEM: the append-only
-  // log paradigm does not compose with team sync (which expects a shared
-  // MEMORY.md that both sides read + write). Gating on `autoEnabled` here
-  // means the !autoEnabled case falls through to the tengu_memdir_disabled
-  // telemetry block below, matching the non-KAIROS path.
-  if (feature('KAIROS') && autoEnabled && getKairosActive()) {
-    logMemoryDirCounts(getAutoMemPath(), {
-      memory_type:
-        'auto' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
-    })
-    return buildAssistantDailyLogPrompt(skipIndex)
-  }
-
-  // Cowork injects memory-policy text via env var; thread into all builders.
-  const coworkExtraGuidelines =
-    process.env.CLAUDE_COWORK_MEMORY_EXTRA_GUIDELINES
-  const extraGuidelines =
-    coworkExtraGuidelines && coworkExtraGuidelines.trim().length > 0
-      ? [coworkExtraGuidelines]
-      : undefined
-
-  if (feature('TEAMMEM')) {
-    if (teamMemPaths!.isTeamMemoryEnabled()) {
-      const autoDir = getAutoMemPath()
-      const teamDir = teamMemPaths!.getTeamMemPath()
-      // Harness guarantees these directories exist so the model can write
-      // without checking. The prompt text reflects this ("already exists").
-      // Only creating teamDir is sufficient: getTeamMemPath() is defined as
-      // join(getAutoMemPath(), 'team'), so recursive mkdir of the team dir
-      // creates the auto dir as a side effect. If the team dir ever moves
-      // out from under the auto dir, add a second ensureMemoryDirExists call
-      // for autoDir here.
-      await ensureMemoryDirExists(teamDir)
-      logMemoryDirCounts(autoDir, {
-        memory_type:
-          'auto' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
-      })
-      logMemoryDirCounts(teamDir, {
-        memory_type:
-          'team' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
-      })
-      return teamMemPrompts!.buildCombinedMemoryPrompt(
-        extraGuidelines,
-        skipIndex,
-      )
-    }
-  }
-
-  if (autoEnabled) {
-    const autoDir = getAutoMemPath()
-    // Harness guarantees the directory exists so the model can write without
-    // checking. The prompt text reflects this ("already exists").
-    await ensureMemoryDirExists(autoDir)
-    logMemoryDirCounts(autoDir, {
-      memory_type:
-        'auto' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
-    })
-    return buildMemoryLines(
-      'auto memory',
-      autoDir,
-      extraGuidelines,
-      skipIndex,
-    ).join('\n')
-  }
-
-  logEvent('tengu_memdir_disabled', {
-    disabled_by_env_var: isEnvTruthy(
-      process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY,
-    ),
-    disabled_by_setting:
-      !isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY) &&
-      getInitialSettings().autoMemoryEnabled === false,
-  })
-  // Gate on the GB flag directly, not isTeamMemoryEnabled() — that function
-  // checks isAutoMemoryEnabled() first, which is definitionally false in this
-  // branch. We want "was this user in the team-memory cohort at all."
-  if (getFeatureValue_CACHED_MAY_BE_STALE('tengu_herring_clock', false)) {
-    logEvent('tengu_team_memdir_disabled', {})
-  }
-  return null
+  // Ocean CLI: 记忆系统已迁移到纯 SQLite，不再使用 markdown 文件。
+  // 返回精简版 fact_store 使用说明，替代原来的 memdir 指令。
+  return [
+    '# 结构化记忆系统',
+    '',
+    '记忆系统使用 fact_store 工具（SQLite + FTS5）存储结构化事实。',
+    '',
+    '## 存储规则',
+    '- 用户偏好/身份 → category="user_pref"（全局，跨项目共享）',
+    '- 项目知识 → category="project"（项目级，跟随项目）',
+    '',
+    '## 操作',
+    '- fact_store(action="search", query="...") — 搜索已有事实',
+    '- fact_store(action="add", content="...", category="...", tags="...") — 添加新事实',
+    '- fact_store(action="update", fact_id=..., content="...") — 更新事实',
+    '- fact_store(action="remove", fact_id=...) — 删除事实',
+    '',
+    '## 使用原则',
+    '- 用户说"记住XXX"时，先搜索是否已有类似事实，有则更新而非新增',
+    '- 提取事实而非原始消息，使用简洁、自包含的陈述',
+    '- 不要保存可从代码或 git 历史推导的信息',
+  ].join('\n')
 }

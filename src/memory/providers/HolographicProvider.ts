@@ -1,13 +1,14 @@
 /**
- * SQLite 结构化事实存储 Provider。
- * 移植自 Hermes HolographicMemoryProvider。
+ * SQLite 结构化事实存储 Provider（双层架构）。
+ *
+ * 全局库: ~/.claude/memory/facts.db — user_pref / tool / general
+ * 项目库: {project}/.claude/memory/facts.db — project
  *
  * 职责：
- * - 管理 SQLite facts 数据库
+ * - 管理双 SQLite facts 数据库
  * - 提供 fact_store / fact_feedback 工具
- * - prefetch 时执行混合检索
- * - 会话结束时自动提取事实
- * - 镜像 memdir 写入
+ * - prefetch 时执行跨库混合检索
+ * - system prompt 注入 user_pref 快照
  */
 
 import { join } from 'node:path'
@@ -16,24 +17,25 @@ import { MemoryProvider } from '../MemoryProvider'
 import { MemoryStore } from '../store/MemoryStore'
 import { FactRetriever } from '../store/FactRetriever'
 import { scanForInjection } from '../security'
-import type { ToolSchema, ProviderContext, FactStoreArgs, FactFeedbackArgs, FactCategory } from '../types'
+import type { ToolSchema, ProviderContext, FactStoreArgs, FactFeedbackArgs, FactCategory, ScoredFact } from '../types'
 
 // -- 工具 Schema 定义 --
 
 const FACT_STORE_SCHEMA: ToolSchema = {
   name: 'fact_store',
-  description: `结构化事实记忆系统。与 memdir 并行使用 — memdir 用于持久文件记忆，fact_store 用于结构化深度检索。
+  description: `结构化事实记忆系统（SQLite+FTS5 索引）。数据来自 memdir 的自动同步。
 
-操作（简单 → 强大）：
-- add — 存储用户期望被记住的事实
+主要用途 — 检索已存储的事实：
 - search — 关键词查找
 - probe — 实体探测：关于某人/某事的所有事实
-- related — 实体关联：与某实体有结构连接的事实
+- related — 实体关联
 - reason — 组合推理：同时关联多个实体的事实
-- contradict — 记忆卫生：发现矛盾事实
-- update/remove/list — CRUD
+- contradict — 矛盾检测
+- list — 浏览事实
 
-重要：回答关于用户的问题时，先 probe 或 reason。`,
+写入说明：
+- add/update/remove 仍可用，但用户画像和偏好应通过 memdir 的 memory 系统写入
+- memdir 写入会自动同步到此索引（onMemoryWrite 钩子）`,
   input_schema: {
     type: 'object',
     properties: {
@@ -70,9 +72,12 @@ const FACT_FEEDBACK_SCHEMA: ToolSchema = {
 }
 
 export class HolographicProvider extends MemoryProvider {
-  private store: MemoryStore | null = null
-  private retriever: FactRetriever | null = null
+  private globalStore: MemoryStore | null = null
+  private projectStore: MemoryStore | null = null
+  private globalRetriever: FactRetriever | null = null
+  private projectRetriever: FactRetriever | null = null
   private minTrust = 0.3
+  private projectRoot = ''
 
   get name(): string {
     return 'holographic'
@@ -83,39 +88,73 @@ export class HolographicProvider extends MemoryProvider {
   }
 
   initialize(ctx: ProviderContext): void {
-    // 全局数据库：跟 Hermes 一致，用户偏好跨项目持久化
+    // 全局数据库：用户偏好跨项目持久化
     const globalHome = process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude')
-    const dbPath = join(globalHome, 'memory', 'facts.db')
-    this.store = new MemoryStore(dbPath)
-    this.retriever = new FactRetriever(this.store)
+    const globalDbPath = join(globalHome, 'memory', 'facts.db')
+    this.globalStore = new MemoryStore(globalDbPath)
+    this.globalRetriever = new FactRetriever(this.globalStore)
+
+    // 项目数据库：项目知识跟随项目
+    this.projectRoot = ctx.projectRoot
+    const projectDbPath = join(ctx.projectRoot, '.claude', 'memory', 'facts.db')
+    this.projectStore = new MemoryStore(projectDbPath)
+    this.projectRetriever = new FactRetriever(this.projectStore)
+  }
+
+  /** 按 category 路由到对应 store */
+  private routeStore(category?: FactCategory): MemoryStore {
+    if (category === 'project' && this.projectStore) return this.projectStore
+    return this.globalStore!
+  }
+
+  /** 根据 fact_id 判断属于哪个库（先查全局再查项目） */
+  private storeForFactId(factId: number): MemoryStore | null {
+    if (this.globalStore) {
+      const row = this.globalStore.connection.prepare('SELECT fact_id FROM facts WHERE fact_id = ?').get(factId)
+      if (row) return this.globalStore
+    }
+    if (this.projectStore) {
+      const row = this.projectStore.connection.prepare('SELECT fact_id FROM facts WHERE fact_id = ?').get(factId)
+      if (row) return this.projectStore
+    }
+    return null
   }
 
   systemPromptBlock(): string {
-    if (!this.store) return ''
-    const total = this.store.getTotalCount()
-    if (total === 0) {
-      return (
-        '# 结构化记忆\n' +
-        '活跃。事实库为空 — 主动使用 fact_store 工具存储用户希望被记住的结构化事实。\n' +
-        '使用 fact_feedback 对使用过的事实评分（训练信任分数）。'
-      )
+    const globalCount = this.globalStore?.getTotalCount() ?? 0
+    const projectCount = this.projectStore?.getTotalCount() ?? 0
+
+    if (globalCount === 0 && projectCount === 0) {
+      return '# 结构化记忆\n事实库为空。使用 fact_store 存储和检索结构化事实。'
     }
-    return (
-      `# 结构化记忆\n` +
-      `活跃。已存储 ${total} 条事实，支持实体解析和信任评分。\n` +
-      `使用 fact_store 搜索、探测实体、跨实体推理或添加事实。\n` +
-      `使用 fact_feedback 对使用过的事实评分（训练信任分数）。`
-    )
+
+    let block = '# 结构化记忆\n'
+    if (globalCount > 0) block += `全局事实库 ${globalCount} 条（用户偏好等）。`
+    if (projectCount > 0) block += `项目事实库 ${projectCount} 条（项目知识等）。`
+    block += '\n\n**重要**：回答关于用户、项目、技术栈的问题时，先查 fact_store 再读文件。'
+    block += '\n支持 search/probe/related/reason/contradict 操作。'
+
+    // 注入 user_pref 快照
+    const userPrefs = this.globalStore?.listFacts('user_pref', 0.0, 20) ?? []
+    if (userPrefs.length > 0) {
+      block += '\n\n## 用户信息\n'
+      block += userPrefs.map(f => `- ${f.content}`).join('\n')
+    }
+
+    return block
   }
 
   prefetch(query: string): string {
-    if (!this.retriever || !query) return ''
+    if (!query) return ''
     try {
-      const results = this.retriever.search(query, { minTrust: this.minTrust, limit: 5 })
-      if (results.length === 0) return ''
+      // 跨库搜索
+      const globalResults = this.globalRetriever?.search(query, { minTrust: this.minTrust, limit: 3 }) ?? []
+      const projectResults = this.projectRetriever?.search(query, { minTrust: this.minTrust, limit: 3 }) ?? []
+      const all = [...globalResults, ...projectResults]
+      if (all.length === 0) return ''
 
       // 安全过滤
-      const safeResults = results.filter(r => {
+      const safeResults = all.filter(r => {
         const scan = scanForInjection(r.content)
         return scan.safe
       })
@@ -140,26 +179,11 @@ export class HolographicProvider extends MemoryProvider {
     throw new Error(`Unknown tool: ${toolName}`)
   }
 
-  onSessionEnd(messages: Array<{ role: string; content: string }>): void {
-    if (!this.store || !messages.length) return
-    this.autoExtractFacts(messages)
-  }
-
-  onMemoryWrite(action: string, target: string, content: string): void {
-    if (action === 'add' && this.store && content) {
-      try {
-        const category = target === 'user' ? 'user_pref' : 'general'
-        this.store.addFact(content, category)
-      } catch {
-        // 去重冲突，忽略
-      }
-    }
-  }
-
   shutdown(): void {
-    this.store?.close()
-    this.store = null
-    this.retriever = null
+    this.globalStore?.close()
+    this.projectStore?.close()
+    this.globalStore = this.projectStore = null
+    this.globalRetriever = this.projectRetriever = null
   }
 
   // -- 工具处理 ---
@@ -167,34 +191,64 @@ export class HolographicProvider extends MemoryProvider {
   private handleFactStore(args: FactStoreArgs): string {
     try {
       const action = args.action
-      const store = this.store!
-      const retriever = this.retriever!
 
       switch (action) {
         case 'add': {
           if (!args.content) return JSON.stringify({ error: "Missing required argument: content" })
-          const factId = store.addFact(
-            args.content,
-            args.category ?? 'general',
-            args.tags ?? '',
-          )
+          const store = this.routeStore(args.category)
+          const category = args.category ?? 'general'
+
+          // Upsert: 先检查语义相似，有则更新，无则新增
+          const similar = store.findSimilarFact(args.content, category)
+          if (similar) {
+            // 合并更新：用新内容替换旧内容（新信息更完整）
+            store.updateFact(similar.factId, {
+              content: args.content,
+              tags: args.tags,
+              trustDelta: 0.05, // 确认更新，小幅提升信任
+            })
+            return JSON.stringify({ fact_id: similar.factId, status: 'updated', reason: 'similar_fact_merged' })
+          }
+
+          const factId = store.addFact(args.content, category, args.tags ?? '')
           return JSON.stringify({ fact_id: factId, status: 'added' })
         }
 
         case 'search': {
           if (!args.query) return JSON.stringify({ error: "Missing required argument: query" })
-          const results = retriever.search(args.query, {
-            category: args.category,
+          const results: ScoredFact[] = []
+          // 搜索全局库
+          const globalResults = this.globalRetriever?.search(args.query, {
+            category: args.category !== 'project' ? args.category : undefined,
             minTrust: args.min_trust ?? this.minTrust,
             limit: args.limit ?? 10,
+          }) ?? []
+          results.push(...globalResults)
+          // 如果未指定 category 或指定了 project，也搜项目库
+          if (!args.category || args.category === 'project') {
+            const projectResults = this.projectRetriever?.search(args.query, {
+              category: args.category === 'project' ? undefined : undefined,
+              minTrust: args.min_trust ?? this.minTrust,
+              limit: args.limit ?? 10,
+            }) ?? []
+            results.push(...projectResults)
+          }
+          // 去重并截断
+          const seen = new Set<string>()
+          const deduped = results.filter(r => {
+            if (seen.has(r.content)) return false
+            seen.add(r.content)
+            return true
           })
-          return JSON.stringify({ results, count: results.length })
+          return JSON.stringify({ results: deduped.slice(0, args.limit ?? 10), count: deduped.length })
         }
 
         case 'probe': {
           if (!args.entity) return JSON.stringify({ error: "Missing required argument: entity" })
+          const store = this.routeStore(args.category)
+          const retriever = args.category === 'project' ? this.projectRetriever! : this.globalRetriever!
           const results = retriever.probe(args.entity, {
-            category: args.category,
+            category: undefined,
             minTrust: args.min_trust ?? this.minTrust,
             limit: args.limit ?? 10,
           })
@@ -203,8 +257,9 @@ export class HolographicProvider extends MemoryProvider {
 
         case 'related': {
           if (!args.entity) return JSON.stringify({ error: "Missing required argument: entity" })
+          const retriever = args.category === 'project' ? this.projectRetriever! : this.globalRetriever!
           const results = retriever.related(args.entity, {
-            category: args.category,
+            category: undefined,
             minTrust: args.min_trust ?? this.minTrust,
             limit: args.limit ?? 10,
           })
@@ -214,8 +269,9 @@ export class HolographicProvider extends MemoryProvider {
         case 'reason': {
           const entities = args.entities ?? []
           if (entities.length === 0) return JSON.stringify({ error: "reason requires 'entities' list" })
+          const retriever = args.category === 'project' ? this.projectRetriever! : this.globalRetriever!
           const results = retriever.reason(entities, {
-            category: args.category,
+            category: undefined,
             minTrust: args.min_trust ?? this.minTrust,
             limit: args.limit ?? 10,
           })
@@ -223,8 +279,9 @@ export class HolographicProvider extends MemoryProvider {
         }
 
         case 'contradict': {
+          const retriever = args.category === 'project' ? this.projectRetriever! : this.globalRetriever!
           const results = retriever.contradict({
-            category: args.category,
+            category: undefined,
             threshold: 0.3,
             limit: args.limit ?? 10,
           })
@@ -233,6 +290,8 @@ export class HolographicProvider extends MemoryProvider {
 
         case 'update': {
           if (!args.fact_id) return JSON.stringify({ error: "Missing required argument: fact_id" })
+          const store = this.storeForFactId(args.fact_id)
+          if (!store) return JSON.stringify({ error: `fact_id ${args.fact_id} not found` })
           const updated = store.updateFact(args.fact_id, {
             content: args.content,
             tags: args.tags,
@@ -244,11 +303,14 @@ export class HolographicProvider extends MemoryProvider {
 
         case 'remove': {
           if (!args.fact_id) return JSON.stringify({ error: "Missing required argument: fact_id" })
+          const store = this.storeForFactId(args.fact_id)
+          if (!store) return JSON.stringify({ error: `fact_id ${args.fact_id} not found` })
           const removed = store.removeFact(args.fact_id)
           return JSON.stringify({ removed })
         }
 
         case 'list': {
+          const store = this.routeStore(args.category)
           const facts = store.listFacts(args.category, args.min_trust ?? 0.0, args.limit ?? 10)
           return JSON.stringify({ facts, count: facts.length })
         }
@@ -264,68 +326,12 @@ export class HolographicProvider extends MemoryProvider {
   private handleFactFeedback(args: FactFeedbackArgs): string {
     try {
       if (!args.fact_id) return JSON.stringify({ error: "Missing required argument: fact_id" })
-      const result = this.store!.recordFeedback(args.fact_id, args.action === 'helpful')
+      const store = this.storeForFactId(args.fact_id)
+      if (!store) return JSON.stringify({ error: `fact_id ${args.fact_id} not found` })
+      const result = store.recordFeedback(args.fact_id, args.action === 'helpful')
       return JSON.stringify(result)
     } catch (err) {
       return JSON.stringify({ error: String(err) })
-    }
-  }
-
-  // -- 自动提取 ---
-
-  private autoExtractFacts(messages: Array<{ role: string; content: string }>): void {
-    const PREF_PATTERNS = [
-      // 英文
-      /\bI\s+(?:prefer|like|love|use|want|need)\s+(.+)/i,
-      /\bmy\s+(?:favorite|preferred|default)\s+\w+\s+is\s+(.+)/i,
-      /\bI\s+(?:always|never|usually)\s+(.+)/i,
-      // 中文
-      /我(?:叫|是)\s*(.+)/,
-      /记住[我他她它]?(?:叫|是|的|名|叫名)?\s*(.+)/,
-      /别?忘[了记]\s*(.+)/,
-      /我(?:喜欢|偏好|习惯|常用|默认)\s*(.+)/,
-      /我(?:的)?(?:名字|姓|角色|职业|工作)\s*(?:是|叫)\s*(.+)/,
-    ]
-    const DECISION_PATTERNS = [
-      /\bwe\s+(?:decided|agreed|chose)\s+(?:to\s+)?(.+)/i,
-      /\bthe\s+project\s+(?:uses|needs|requires)\s+(.+)/i,
-      /项目(?:使用|需要|采用)\s*(.+)/,
-      /(?:决定|约定|规范)(?:使用|用|是)\s*(.+)/,
-    ]
-
-    let extracted = 0
-    for (const msg of messages) {
-      if (msg.role !== 'user') continue
-      const content = msg.content
-      if (typeof content !== 'string' || content.length < 10) continue
-
-      for (const pattern of PREF_PATTERNS) {
-        if (pattern.test(content)) {
-          try {
-            this.store!.addFact(content.slice(0, 400), 'user_pref')
-            extracted++
-          } catch {
-            // 去重冲突
-          }
-          break
-        }
-      }
-
-      for (const pattern of DECISION_PATTERNS) {
-        if (pattern.test(content)) {
-          try {
-            this.store!.addFact(content.slice(0, 400), 'project')
-            extracted++
-          } catch {
-            // 去重冲突
-          }
-          break
-        }
-      }
-    }
-
-    if (extracted > 0) {
-      console.log(`[HolographicProvider] 自动提取 ${extracted} 条事实`)
     }
   }
 }

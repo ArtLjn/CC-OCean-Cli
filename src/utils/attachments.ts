@@ -2363,14 +2363,16 @@ export type MemoryPrefetch = {
  */
 export function startRelevantMemoryPrefetch(
   messages: ReadonlyArray<Message>,
-  toolUseContext: ToolUseContext,
+  _toolUseContext: ToolUseContext,
 ): MemoryPrefetch | undefined {
-  // --- Holographic fast path (synchronous, <10ms, no API call) ---
+  // SQLite-only prefetch (synchronous, <10ms, no API call)
   const lastUserMsg = messages.findLast(m => m.type === 'user' && !m.isMeta)
+  if (!lastUserMsg) return undefined
+
+  const input = getUserMessageText(lastUserMsg)
+  if (!input) return undefined
+
   const holographicPrefetch = (() => {
-    if (!lastUserMsg) return ''
-    const input = getUserMessageText(lastUserMsg)
-    if (!input) return ''
     try {
       const { getMemoryManager } = require('../memory/instance.js') as typeof import('../memory/instance.js')
       const manager = getMemoryManager()
@@ -2380,93 +2382,15 @@ export function startRelevantMemoryPrefetch(
     }
   })()
 
-  if (
-    !isAutoMemoryEnabled() ||
-    !getFeatureValue_CACHED_MAY_BE_STALE('tengu_moth_copse', false)
-  ) {
-    // memdir prefetch disabled — return holographic-only result if available
-    if (holographicPrefetch) {
-      const promise = Promise.resolve([{ type: 'text', content: holographicPrefetch }])
-      const handle: MemoryPrefetch = {
-        promise,
-        settledAt: Date.now(),
-        consumedOnIteration: -1,
-        [Symbol.dispose]() {},
-      }
-      return handle
-    }
-    return undefined
-  }
+  if (!holographicPrefetch) return undefined
 
-  const lastUserMessage = lastUserMsg
-  if (!lastUserMessage) {
-    return undefined
-  }
-
-  const input = getUserMessageText(lastUserMessage)
-  // Single-word prompts lack enough context for meaningful term extraction
-  if (!input || !/\s/.test(input.trim())) {
-    if (holographicPrefetch) {
-      const promise = Promise.resolve([{ type: 'text', content: holographicPrefetch }])
-      const handle: MemoryPrefetch = {
-        promise,
-        settledAt: Date.now(),
-        consumedOnIteration: -1,
-        [Symbol.dispose]() {},
-      }
-      return handle
-    }
-    return undefined
-  }
-
-  const surfaced = collectSurfacedMemories(messages)
-  if (surfaced.totalBytes >= RELEVANT_MEMORIES_CONFIG.MAX_SESSION_BYTES) {
-    return undefined
-  }
-
-  // Chained to the turn-level abort so user Escape cancels the sideQuery
-  // immediately, not just on [Symbol.dispose] when queryLoop exits.
-  const controller = createChildAbortController(toolUseContext.abortController)
-  const firedAt = Date.now()
-  const memdirPromise = getRelevantMemoryAttachments(
-    input,
-    toolUseContext.options.agentDefinitions.activeAgents,
-    toolUseContext.readFileState,
-    collectRecentSuccessfulTools(messages, lastUserMessage),
-    controller.signal,
-    surfaced.paths,
-  ).catch(e => {
-    if (!isAbortError(e)) {
-      logError(e)
-    }
-    return []
-  })
-
-  // Merge memdir results with holographic prefetch
-  const promise = holographicPrefetch
-    ? memdirPromise.then(attachments => {
-        const holographicAttachment = { type: 'text' as const, content: holographicPrefetch }
-        return [...attachments, holographicAttachment as unknown as Attachment]
-      })
-    : memdirPromise
-
+  const promise = Promise.resolve([{ type: 'text', content: holographicPrefetch }])
   const handle: MemoryPrefetch = {
     promise,
-    settledAt: null,
+    settledAt: Date.now(),
     consumedOnIteration: -1,
-    [Symbol.dispose]() {
-      controller.abort()
-      logEvent('tengu_memdir_prefetch_collected', {
-        hidden_by_first_iteration:
-          handle.settledAt !== null && handle.consumedOnIteration === 0,
-        consumed_on_iteration: handle.consumedOnIteration,
-        latency_ms: (handle.settledAt ?? Date.now()) - firedAt,
-      })
-    },
+    [Symbol.dispose]() {},
   }
-  void promise.finally(() => {
-    handle.settledAt = Date.now()
-  })
   return handle
 }
 

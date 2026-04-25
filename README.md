@@ -26,7 +26,7 @@
 - 完整的 Ink TUI 交互界面（与官方 Claude Code 一致）
 - **多模型接入** — Claude / 智谱GLM / 豆包 / DeepSeek，`/model` 一键切换
 - **Auto Mode** — AI 分类器自动审批安全操作，危险操作仍需确认
-- **三层记忆系统** — `/mem` 手动记忆 + 自动提取 + AutoDream 整合 + 结构化事实存储（SQLite+FTS5） — [使用指南](docs/tutorial-memory.md)
+- **双层记忆系统** — 纯 SQLite 结构化事实存储（全局+项目双层隔离）+ 自动提取 + AutoDream 清洗 — [使用指南](docs/tutorial-memory.md)
 - **多模型协作** — `/multi-agent` 按角色分工，真实并行调用 — [使用指南](docs/tutorial-multi-agent.md)
 - **技能系统** — `/skillify` 从会话提炼技能，支持脚本自动生成 — [使用指南](docs/tutorial-skills.md)
 - **Channel IM 集成** — 飞书/钉钉/Telegram 远程控制 Agent — [使用指南](docs/tutorial-channel.md)
@@ -75,30 +75,38 @@ ocean --permission-mode auto
 { "permissions": { "defaultMode": "auto" } }
 ```
 
-### 3. 三层记忆系统
+### 3. 双层记忆系统
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│  手动记忆 (/mem)     自动记忆 (extractMemories)   结构化事实  │
-│  ┌──────────────┐    ┌──────────────────┐    ┌───────────┐ │
-│  │ 项目知识片段   │    │ 用户画像/反馈/动态  │    │ fact_store │ │
-│  │ 压缩总结      │    │ 后台分叉代理自动提取  │    │ SQLite+FTS5│ │
-│  │ 工作交接      │    │ 四种记忆类型        │    │ 实体+信任评分│ │
-│  └──────┬───────┘    └────────┬─────────┘    └─────┬─────┘ │
-│         └────────┬───────────┘                     │       │
-│                  ▼                                  ▼       │
-│         AutoDream 整合引擎              <memory-context>    │
-│         去重 · 修剪 · 压缩索引           围栏注入（<10ms）    │
-│         (24h / 5 session 触发)                              │
-└──────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│                      双层 SQLite 记忆架构                        │
+│                                                                 │
+│   全局库 (~/.claude/memory/facts.db)     项目库 (.claude/memory/) │
+│   ┌─────────────────────────────────┐   ┌────────────────────┐ │
+│   │ user_pref — 用户画像/偏好        │   │ project — 项目知识  │ │
+│   │ tool — 工具使用习惯              │   │ 架构决策/约定/依赖  │ │
+│   │ general — 通用事实               │   │ 跟随项目，天然隔离  │ │
+│   │ 跨项目共享，始终可见              │   │                    │ │
+│   └───────────────┬─────────────────┘   └─────────┬──────────┘ │
+│                   └──────────┬────────────────────┘            │
+│                              ▼                                  │
+│              extractMemories 自动提取（每轮后台 fork agent）       │
+│              → 按内容自动判定 category → 路由到对应库              │
+│              → 语义去重（Jaccard ≥ 0.6）→ 相似则更新             │
+│                              ▼                                  │
+│              AutoDream 定期清洗（矛盾检测/低信任清理/碎片合并）    │
+│                              ▼                                  │
+│              <memory-context> 围栏注入（同步 <10ms，无 API 调用） │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-**结构化事实存储** (`~/.claude/memory/facts.db`)：
-- SQLite + FTS5 全文索引，本地毫秒级检索，替代 Sonnet API 调用
-- 实体自动提取 + 信任评分（helpful +0.05 / unhelpful -0.10）
-- 五种检索模式：search / probe / reason / related / contradict
-- 全局存储，用户偏好跨项目共享（借鉴 Hermes 架构）
-- 后台审查 Agent 自动提取：extractMemories 的 forked agent 同时写入 fact_store
+**核心特性**：
+- **双层隔离** — 用户偏好全局共享，项目知识跟随项目，不串台
+- **FTS5 + 中文 bigram** — 写入时预分词，毫秒级本地检索，不依赖 API
+- **语义去重 + Upsert** — 相似事实自动合并更新，不会无限增长
+- **实体自动提取** — 中英文实体识别 + 自动分类（person/technology/topic）
+- **信任评分** — helpful +0.05 / unhelpful -0.10，低信任事实自动降权
+- **五种高级检索** — search / probe / reason / related / contradict
 
 ```bash
 /mem                    # 列出所有记忆
@@ -213,7 +221,7 @@ ocean -p "your prompt"         # 无头模式
 | CLI 解析 | Commander.js |
 | API | Anthropic SDK |
 | 协议 | MCP, LSP |
-| 记忆存储 | SQLite (bun:sqlite) + FTS5 |
+| 记忆存储 | SQLite (bun:sqlite) + FTS5（全局+项目双层） |
 
 ---
 
@@ -224,7 +232,7 @@ ocean -p "your prompt"         # 无头模式
 │   ├── agents/             # Agent 实现
 │   ├── skills/             # 技能系统
 │   │   └── bundled/        # 内置技能（skillify、auto-skillify 等）
-│   ├── memory/             # 结构化记忆系统（MemoryProvider + SQLite + FTS5）
+│   ├── memory/             # 双层记忆系统（HolographicProvider + 全局/项目 SQLite）
 │   ├── providers/          # 模型提供商接入
 │   ├── utils/hooks/        # Hook 系统核心
 │   └── cli/                # 命令行界面
@@ -260,6 +268,17 @@ ocean -p "your prompt"         # 无头模式
 ---
 
 ## 更新日志
+
+### v1.4.0
+- 双层 SQLite 记忆架构：全局库（user_pref/tool/general）+ 项目库（project）
+- 去掉 memdir markdown 文件写入，统一为纯 SQLite 存储
+- 语义去重（Jaccard ≥ 0.6）+ Upsert 机制，相似事实自动合并更新
+- 中文实体提取：bigram 关键词 + 引号/书名号匹配
+- FTS5 中文搜索增强：写入时 bigram 预分词 + 查询时 bigram 拆分
+- entity_type 自动分类（person/technology/topic）
+- extractMemories forked agent 只写 fact_store，不再写 markdown 文件
+- AutoDream 改为 SQLite consolidation（矛盾检测/去重/低信任清理）
+- prefetch 简化为纯 SQLite 同步检索（<10ms），去掉 memdir 异步路径
 
 ### v1.3.0
 - 结构化事实记忆系统（fact_store）：SQLite + FTS5 毫秒级本地检索

@@ -498,10 +498,12 @@ ${CYBER_RISK_INSTRUCTION}`,
       try {
         const { getMemoryManager } = require('../memory/instance.js') as typeof import('../memory/instance.js')
         const { getCwd } = require('../utils/cwd.js') as typeof import('../utils/cwd.js')
+        const { join } = require('node:path') as typeof import('node:path')
+        const { homedir } = require('node:os') as typeof import('node:os')
         const manager = getMemoryManager() ?? getMemoryManager({
           sessionId: process.env.SESSION_ID ?? '',
           projectRoot: getCwd(),
-          configHome: getCwd(),
+          configHome: process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude'),
         })
         return manager?.buildSystemPrompt() ?? null
       } catch {

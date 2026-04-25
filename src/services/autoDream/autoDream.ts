@@ -24,7 +24,7 @@ import { logForDebugging } from '../../utils/debug.js'
 import type { ToolUseContext } from '../../Tool.js'
 import { logEvent } from '../analytics/index.js'
 import { getFeatureValue_CACHED_MAY_BE_STALE } from '../analytics/growthbook.js'
-import { isAutoMemoryEnabled, getAutoMemPath } from '../../memdir/paths.js'
+import { isAutoMemoryEnabled } from '../../memdir/paths.js'
 import { isAutoDreamEnabled } from './config.js'
 import { getProjectDir } from '../../utils/sessionStorage.js'
 import {
@@ -208,7 +208,7 @@ export function initAutoDream(): void {
     })
 
     try {
-      const memoryRoot = getAutoMemPath()
+      const memoryRoot = '.claude/memory'  // 概念路径，不再实际读写文件
       const transcriptDir = getProjectDir(getOriginalCwd())
       // Tool constraints note goes in `extra`, not the shared prompt body —
       // manual /dream runs in the main loop with normal permissions and this
