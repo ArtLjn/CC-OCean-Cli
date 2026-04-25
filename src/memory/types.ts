@@ -4,7 +4,22 @@
  */
 
 /** 事实分类 */
-export type FactCategory = 'user_pref' | 'project' | 'tool' | 'general'
+export type FactCategory = 'identity' | 'coding_style' | 'tool_pref' | 'workflow' | 'project' | 'general'
+
+/** 已废弃的旧分类值（兼容映射用） */
+export const LEGACY_CATEGORIES: Record<string, FactCategory> = {
+  user_pref: 'identity',
+  tool: 'tool_pref',
+}
+
+/** 全局库 category 集合（非 project 的都存全局库） */
+export const GLOBAL_CATEGORIES = new Set<FactCategory>(['identity', 'coding_style', 'tool_pref', 'workflow', 'general'])
+
+/** 需要始终注入 system prompt 的 category */
+export const ALWAYS_INJECT_CATEGORIES = new Set<FactCategory>(['identity', 'workflow'])
+
+/** 需要按项目技术栈匹配注入的 category */
+export const TECH_MATCH_CATEGORIES = new Set<FactCategory>(['coding_style'])
 
 /** 存储的事实记录 */
 export interface Fact {
