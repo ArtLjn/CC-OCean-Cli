@@ -184,11 +184,12 @@ export class MemoryStore {
    *    - 编辑距离 < 0.5 → 不合并（同实体但不同方面，如"喜欢Python"和"也喜欢Go"）
    * 3. 无实体重叠 → 直接新增
    */
-  findSimilarFact(content: string, category: FactCategory): Fact | null {
+  findSimilarFact(content: string, category?: FactCategory): Fact | null {
     const newEntities = this.extractEntities(content).map(e => e.toLowerCase())
     if (newEntities.length === 0) return null
 
     const entitySet = new Set(newEntities)
+    // 不传 category 时搜索全部分类（用于去重回退）
     const existing = this.listFacts(category, 0.0, 50)
     let bestMatch: Fact | null = null
     let bestScore = 0

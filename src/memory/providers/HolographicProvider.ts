@@ -516,13 +516,15 @@ export class HolographicProvider extends MemoryProvider {
           // 路由决策：category 标签不变，但 store 可能被内容检测纠正
           const { store } = this.validateAndRoute(resolvedCategory, args.content)
 
-          // 去重：实体优先 + 编辑距离
+          // 去重：实体优先 + 编辑距离（跨 category 搜索，合并时保留旧 category）
           const similar = store.findSimilarFact(args.content, resolvedCategory)
+            ?? store.findSimilarFact(args.content) // 回退：不限 category
           if (similar) {
             store.updateFact(similar.factId, {
               content: args.content,
               tags: args.tags,
               trustDelta: 0.05,
+              // 合并时不覆盖 category，保留旧事实的分类
             })
             const demoted = store.demoteContradictingFacts(similar.factId, args.content, resolvedCategory)
             return JSON.stringify({
