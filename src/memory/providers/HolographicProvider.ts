@@ -446,6 +446,7 @@ export class HolographicProvider extends MemoryProvider {
             })
             // 矛盾降权：同 category 共享实体但内容冲突的旧事实
             const demoted = store.demoteContradictingFacts(similar.factId, args.content, resolvedCategory)
+            // identity 变更时同步 MEMORY.md chunk 文件（已迁移到纯 SQLite，不再需要）
             return JSON.stringify({
               fact_id: similar.factId,
               status: 'updated',

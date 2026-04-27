@@ -741,8 +741,12 @@ export class MemoryStore {
 
     const add = (name: string): void => {
       const stripped = name.trim()
-      if (stripped && stripped.length >= 2 && stripped.length <= 30
-          && !seen.has(stripped.toLowerCase())) {
+      // 实体验证：拒绝包含句子级标点的碎片
+      const CN_PUNCT = /[、，。！？；：,…—（）《》【】""''「」\s]/
+      if (stripped
+          && stripped.length >= 2 && stripped.length <= 30
+          && !seen.has(stripped.toLowerCase())
+          && !CN_PUNCT.test(stripped)) {
         seen.add(stripped.toLowerCase())
         result.push(stripped)
       }

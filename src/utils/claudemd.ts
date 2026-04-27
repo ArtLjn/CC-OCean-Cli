@@ -976,20 +976,9 @@ export const getMemoryFiles = memoize(
       }
     }
 
-    // Memdir entrypoint (memory.md) - only if feature is on and file exists
-    if (isAutoMemoryEnabled()) {
-      const { info: memdirEntry } = await safelyReadMemoryFileAsync(
-        getAutoMemEntrypoint(),
-        'AutoMem',
-      )
-      if (memdirEntry) {
-        const normalizedPath = normalizePathForComparison(memdirEntry.path)
-        if (!processedPaths.has(normalizedPath)) {
-          processedPaths.add(normalizedPath)
-          result.push(memdirEntry)
-        }
-      }
-    }
+    // Memdir entrypoint (memory.md) — Ocean CLI: 已全面迁移到 fact_store (SQLite)，
+    // 不再注入 MEMORY.md 文件，避免两套系统产生冲突。
+    // if (isAutoMemoryEnabled()) { ... }
 
     // Team memory entrypoint - only if feature is on and file exists
     if (feature('TEAMMEM') && teamMemPaths!.isTeamMemoryEnabled()) {
