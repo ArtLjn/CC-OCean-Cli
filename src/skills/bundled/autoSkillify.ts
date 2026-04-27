@@ -1,6 +1,7 @@
 import { getSessionMemoryContent } from '../../services/SessionMemory/sessionMemoryUtils.js'
 import type { Message } from '../../types/message.js'
 import { getMessagesAfterCompactBoundary } from '../../utils/messages.js'
+import { getMemoryManager } from '../../memory/instance.js'
 import { registerBundledSkill } from '../bundledSkills.js'
 
 function extractUserMessages(messages: Message[]): string[] {
@@ -149,12 +150,32 @@ export function registerAutoSkillifySkill(): void {
         getMessagesAfterCompactBoundary(context.messages),
       )
 
+      // 注入结构化记忆：用户偏好 + 项目知识
+      const memoryManager = getMemoryManager()
+      let memoryContext = ''
+      if (memoryManager) {
+        const userMessages = extractUserMessages(
+          getMessagesAfterCompactBoundary(context.messages),
+        )
+        const lastUserMsg = userMessages.at(-1) ?? ''
+        memoryContext = memoryManager.prefetchAll(lastUserMsg)
+      }
+
       const prompt = AUTO_SKILLIFY_PROMPT.replace(
         '{{sessionMemory}}',
         sessionMemory,
       ).replace('{{userMessages}}', userMessages.join('\n\n---\n\n'))
 
-      return [{ type: 'text', text: prompt }]
+      const parts: Array<{ type: 'text'; text: string }> = [
+        { type: 'text', text: prompt },
+      ]
+      if (memoryContext) {
+        parts.push({
+          type: 'text',
+          text: `\n## 用户偏好与项目知识\n${memoryContext}\n\n## 技能存储位置推荐规则\n根据注入的项目知识自动判断技能存储位置：\n- 如果技能内容涉及当前项目的架构、模块、API、部署流程等 → 推荐 **This repo** (项目级)\n- 如果技能是通用工作流（commit规范、代码审查、日报等）且不依赖特定项目 → 推荐 **Personal** (全局级)\n- 在询问用户时，先给出推荐并说明理由，再让用户确认`,
+        })
+      }
+      return parts
     },
   })
 }

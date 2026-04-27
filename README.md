@@ -91,7 +91,7 @@ ocean --permission-mode auto
 - **FTS5 + 中文 bigram** — 写入时预分词，毫秒级本地检索，不依赖 API
 - **信任评分机制** — helpful +0.05 / unhelpful -0.10，低信任（<0.5）事实自动排除在注入之外
 - **五种高级检索** — search / probe / reason / related / contradict，支持语义搜索、实体关联、冲突检测
-- **三层隔离保障** — 路由层内容检测自动纠正分类 + Prompt强制引导 + category白名单，防止项目知识污染全局库
+- **三层隔离保障** — 路由与分类解耦，category标签由AI标注（允许偏差），存储位置由内容级检测确定性地决定，防止项目知识污染全局库
 
 **六种事实分类**：
 
@@ -101,7 +101,7 @@ ocean --permission-mode auto
 | `coding_style` | 全局库 | 编码规范、命名约定、设计模式偏好（按语言） | 按项目技术栈匹配注入 |
 | `tool_pref` | 全局库 | 工具偏好、CLI配置、模型切换习惯 | prefetch 检索注入 |
 | `workflow` | 全局库 | 工作流习惯、提交流程、发布偏好、文档处理习惯 | 始终注入 |
-| `general` | 全局库 | 跨项目通用偏好、视觉审美、配色偏好 | prefetch 检索注入 |
+| `general` | 全局库 | 跨项目通用偏好、视觉审美、配色偏好 | prefetch 检索注入（内容含项目标识时自动路由到项目库） |
 | `project` | 项目库 | 项目架构决策、实现细节、经验教训、会议记录 | prefetch 检索注入 + 概览始终注入 |
 
 ```bash
@@ -324,8 +324,10 @@ ocean -p "your prompt"         # 无头模式
 - 全局记忆分类细化：从 4 种 category 扩展到 6 种（identity / coding_style / tool_pref / workflow / project / general）
 - 分层注入策略：identity/workflow 始终注入，coding_style 按项目技术栈匹配注入，其他走 prefetch
 - 语义去重大幅优化：实体优先（≥50% 重叠）+ 归一化编辑距离辅助，彻底解决阈值两难问题
-- 分层自动注入：每轮对话前智能预取，identity/workflow/项目概览始终注入，总token占比<2%
+- 路由与分类解耦：category 标签由 AI 标注（允许偏差），存储位置由内容级检测确定性决定
+- 去重搜索跨 category 回退：同 category 搜不到时回退搜索全部分类，合并时保留旧分类标签
 - 需求变更自动检测：同实体下内容冲突时自动降权旧事实，新需求自动覆盖旧设计
+- Skill 记忆增强：skillify 生成技能时自动注入用户偏好和项目知识，智能推荐项目级/全局级存储位置
 - 实体提取修复：去掉 bigram 碎片入库，新增中文声明模式提取（"我叫XXX"、"名字是XXX"）
 - 孤立实体自动清理：update/remove 事实时自动清理无关联实体
 - system prompt 引导 AI 主动操作 fact_store（"记住"时立即写入，update 时保留旧信息）
