@@ -98,6 +98,8 @@ function buildExtractSQLiteOnlyPrompt(newMessageCount: number): string {
     `- External system pointers (who holds deploy credentials, which Slack channel for alerts)`,
     `- Project timeline constraints and stakeholder requirements (deadlines, compliance)`,
     `- Past incidents and lessons learned (what broke, why, how it was fixed)`,
+    `- **CRITICAL**: Any fact mentioning the current project's name, modules, implementation details,`,
+    `  or architecture MUST use category="project", NOT "general". When in doubt, use "project".`,
     '',
     `### DO NOT extract`,
     `- Raw code snippets (but DO extract patterns they reveal)`,

@@ -13,7 +13,7 @@
 
 import { join, relative } from 'node:path'
 import { homedir } from 'node:os'
-import { existsSync, statSync, readdirSync } from 'node:fs'
+import { existsSync, statSync, readdirSync, readFileSync } from 'node:fs'
 import { MemoryProvider } from '../MemoryProvider'
 import { MemoryStore } from '../store/MemoryStore'
 import { FactRetriever } from '../store/FactRetriever'
@@ -108,6 +108,8 @@ export class HolographicProvider extends MemoryProvider {
   private minTrust = 0.3
   private projectRoot = ''
   private overviewNeedsUpdate = false
+  /** 从项目根目录提取的项目标识，用于内容级路由判断 */
+  private projectIdSignals: string[] = []
 
   get name(): string {
     return 'holographic'
@@ -129,6 +131,9 @@ export class HolographicProvider extends MemoryProvider {
     const projectDbPath = join(ctx.projectRoot, '.claude', 'memory', 'facts.db')
     this.projectStore = new MemoryStore(projectDbPath)
     this.projectRetriever = new FactRetriever(this.projectStore, { temporalDecayHalfLife: 30 })
+
+    // 提取项目标识信号（目录名、package name 等），用于内容级路由
+    this.projectIdSignals = this.extractProjectIdSignals(ctx.projectRoot)
 
     // 信任衰减：session 启动时清理过期事实
     this.globalStore.decayTrustScores()
@@ -183,7 +188,82 @@ export class HolographicProvider extends MemoryProvider {
     return category === 'project'
   }
 
-  /** 按 category 路由到对应 store */
+  /**
+   * 从项目根目录提取标识信号，用于内容级路由判断。
+   * 提取：目录名、package.json/pyproject.toml 的 name 字段。
+   */
+  private extractProjectIdSignals(projectRoot: string): string[] {
+    const signals: string[] = []
+    // 目录名（如 "ocean-cc-cli"、"skill_engine"）
+    const dirName = basename(projectRoot)
+    if (dirName && dirName !== '.claude') signals.push(dirName.toLowerCase())
+
+    // package.json 的 name
+    try {
+      const pkg = JSON.parse(
+        readFileSync(join(projectRoot, 'package.json'), 'utf-8'),
+      )
+      if (pkg.name) {
+        // 去掉 scope：@anthropic/claude-code → claude-code
+        const name = pkg.name.replace(/^@[^/]+\//, '').toLowerCase()
+        if (name) signals.push(name)
+      }
+    } catch { /* no package.json */ }
+
+    // pyproject.toml 的 name
+    try {
+      const content = readFileSync(join(projectRoot, 'pyproject.toml'), 'utf-8')
+      const match = content.match(/^name\s*=\s*"([^"]+)"/m)
+      if (match?.[1]) signals.push(match[1].toLowerCase())
+    } catch { /* no pyproject.toml */ }
+
+    return [...new Set(signals)]
+  }
+
+  /**
+   * 内容级项目检测：判断事实内容是否包含项目标识。
+   * 用于防止项目知识被错误写入全局库。
+   */
+  private isProjectContent(content: string): boolean {
+    if (this.projectIdSignals.length === 0) return false
+    const lower = content.toLowerCase()
+    for (const signal of this.projectIdSignals) {
+      // 至少匹配一个完整信号词
+      if (lower.includes(signal)) return true
+    }
+    // 额外检查：内容包含项目特有的文件路径模式（src/xxx/、项目名+实现细节关键词）
+    if (/项目(?:概览|架构|结构|实现|设计|代码|模块|源码)/.test(content)) return true
+    return false
+  }
+
+  /**
+   * 路由决策（写入时调用）。
+   *
+   * 确定性规则，不依赖 AI 分类准确性：
+   * - identity/coding_style/tool_pref/workflow → 全局库（这些语义明确，永远是用户级的）
+   * - project → 项目库
+   * - general → 内容包含项目标识则路由到项目库，否则全局库
+   *
+   * category 标签保持 AI 原始标注，路由层不修改。
+   * 这样即使 AI 标错 category，存储位置也是对的。
+   */
+  private validateAndRoute(
+    category: FactCategory,
+    content: string,
+  ): { store: MemoryStore; resolvedCategory: FactCategory } {
+    // project → 项目库
+    if (this.isProjectCategory(category) && this.projectStore) {
+      return { store: this.projectStore, resolvedCategory: category }
+    }
+    // general + 内容包含项目标识 → 项目库（category 保持 general）
+    if (category === 'general' && this.projectStore && this.isProjectContent(content)) {
+      return { store: this.projectStore, resolvedCategory: category }
+    }
+    // 其余全部 → 全局库
+    return { store: this.globalStore!, resolvedCategory: category }
+  }
+
+  /** 按 category 路由到对应 store（不验证内容，用于 update/remove 等已知 fact_id 的操作） */
   private routeStore(category?: FactCategory): MemoryStore {
     if (this.isProjectCategory(category) && this.projectStore) return this.projectStore
     return this.globalStore!
@@ -433,20 +513,18 @@ export class HolographicProvider extends MemoryProvider {
       switch (action) {
         case 'add': {
           if (!args.content) return JSON.stringify({ error: "Missing required argument: content" })
-          const store = this.routeStore(resolvedCategory)
+          // 路由决策：category 标签不变，但 store 可能被内容检测纠正
+          const { store } = this.validateAndRoute(resolvedCategory, args.content)
 
-          // 去重：Jaccard 预筛，找到相似候选
+          // 去重：实体优先 + 编辑距离
           const similar = store.findSimilarFact(args.content, resolvedCategory)
           if (similar) {
-            // 直接合并：用新内容替换旧内容，小幅提升信任
             store.updateFact(similar.factId, {
               content: args.content,
               tags: args.tags,
               trustDelta: 0.05,
             })
-            // 矛盾降权：同 category 共享实体但内容冲突的旧事实
             const demoted = store.demoteContradictingFacts(similar.factId, args.content, resolvedCategory)
-            // identity 变更时同步 MEMORY.md chunk 文件（已迁移到纯 SQLite，不再需要）
             return JSON.stringify({
               fact_id: similar.factId,
               status: 'updated',
@@ -456,11 +534,11 @@ export class HolographicProvider extends MemoryProvider {
           }
 
           const factId = store.addFact(args.content, resolvedCategory, args.tags ?? '')
-          // 矛盾降权：新事实可能与旧事实冲突（需求变更）
           const demoted = store.demoteContradictingFacts(factId, args.content, resolvedCategory)
           return JSON.stringify({
             fact_id: factId,
             status: 'added',
+            category: resolvedCategory,
             ...(demoted > 0 ? { contradicted_demoted: demoted } : {}),
           })
         }
