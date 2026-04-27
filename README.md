@@ -85,7 +85,7 @@ ocean --permission-mode auto
 - **双层隔离** — 用户偏好全局共享，项目知识跟随项目，不串台
 - **自动提取** — 每轮对话结束，后台 fork agent 自动提取用户偏好、项目结构、技术栈等事实写入 SQLite
 - **FTS5 + 中文 bigram** — 写入时预分词，毫秒级本地检索，不依赖 API
-- **语义去重 + Upsert** — Jaccard + 包含率双重预筛，相似事实合并更新，不会无限增长
+- **语义去重 + Upsert** — 实体优先（≥50% 重叠）+ 归一化编辑距离辅助，相似事实合并更新，不会无限增长
 - **实体自动提取** — 中英文实体识别 + 自动分类（person/technology/topic）
 - **信任评分** — helpful +0.05 / unhelpful -0.10，低信任事实自动降权
 - **五种高级检索** — search / probe / reason / related / contradict
@@ -309,7 +309,7 @@ ocean -p "your prompt"         # 无头模式
 ### v1.5.0
 - 全局记忆分类细化：从 4 种 category 扩展到 6 种（identity / coding_style / tool_pref / workflow / project / general）
 - 分层注入策略：identity/workflow 始终注入，coding_style 按项目技术栈匹配注入，其他走 prefetch
-- 语义去重增强：Jaccard + 包含率双重预筛（解决长短文本匹配问题），阈值 0.6
+- 语义去重增强：实体优先（≥50% 重叠）+ 归一化编辑距离辅助，解决阈值两难问题
 - 实体提取修复：去掉 bigram 碎片入库，新增中文声明模式提取（"我叫XXX"、"名字是XXX"）
 - 孤立实体自动清理：update/remove 事实时自动清理无关联实体
 - system prompt 引导 AI 主动操作 fact_store（"记住"时立即写入，update 时保留旧信息）
@@ -323,7 +323,7 @@ ocean -p "your prompt"         # 无头模式
 ### v1.4.0
 - 双层 SQLite 记忆架构：全局库（user_pref/tool/general）+ 项目库（project）
 - 去掉 memdir markdown 文件写入，统一为纯 SQLite 存储
-- 语义去重（Jaccard ≥ 0.6）+ Upsert 机制，相似事实自动合并更新
+- 实体优先去重 + Upsert 机制，共享实体 + 编辑距离判断相似事实自动合并更新
 - 中文实体提取：bigram 关键词 + 引号/书名号匹配
 - FTS5 中文搜索增强：写入时 bigram 预分词 + 查询时 bigram 拆分
 - entity_type 自动分类（person/technology/topic）

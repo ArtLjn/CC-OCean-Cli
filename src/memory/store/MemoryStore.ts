@@ -175,26 +175,82 @@ export class MemoryStore {
   }
 
   /**
-   * 查找语义相似的事实。
-   * 综合评分 = max(Jaccard, 包含率)，解决长文本 vs 短文本的匹配问题。
+   * 实体优先去重：以实体重叠为主信号，文本相似度为辅助。
+   *
+   * 策略：
+   * 1. 提取新内容的实体 → 在同 category 中查找共享实体的已有事实
+   * 2. 对有实体重叠的候选，计算归一化编辑距离作为文本相似度
+   *    - 编辑距离 ≥ 0.5 → 合并（同主题更新，如改名字）
+   *    - 编辑距离 < 0.5 → 不合并（同实体但不同方面，如"喜欢Python"和"也喜欢Go"）
+   * 3. 无实体重叠 → 直接新增
    */
-  findSimilarFact(content: string, category: FactCategory, threshold = 0.6): Fact | null {
-    const tokens = this.tokenizeForDedup(content)
-    if (tokens.size < 3) return null
+  findSimilarFact(content: string, category: FactCategory): Fact | null {
+    const newEntities = this.extractEntities(content).map(e => e.toLowerCase())
+    if (newEntities.length === 0) return null
+
+    const entitySet = new Set(newEntities)
     const existing = this.listFacts(category, 0.0, 50)
     let bestMatch: Fact | null = null
     let bestScore = 0
+
     for (const fact of existing) {
-      const factTokens = this.tokenizeForDedup(fact.content)
-      const jaccard = this.jaccardSimilarity(tokens, factTokens)
-      const containment = this.containmentScore(tokens, factTokens)
-      const score = Math.max(jaccard, containment)
-      if (score >= threshold && score > bestScore) {
+      // 获取已有事实的实体
+      const factEntityNames = (this.stmtGetEntitiesForFact.all(fact.factId) as { name: string }[])
+        .map(r => r.name.toLowerCase())
+      if (factEntityNames.length === 0) continue
+
+      const factEntitySet = new Set(factEntityNames)
+
+      // 计算实体重叠率（双向取 min，确保双方都有显著重叠）
+      let overlap = 0
+      for (const e of entitySet) { if (factEntitySet.has(e)) overlap++ }
+      const newInOld = overlap / entitySet.size       // 新事实实体被旧事实覆盖的比例
+      const oldInNew = overlap / factEntitySet.size    // 旧事实实体被新事实覆盖的比例
+      const entityScore = Math.min(newInOld, oldInNew) // 双向最小值，避免一方太稀疏
+
+      // 实体重叠 ≥ 50% 才考虑合并
+      if (entityScore < 0.5) continue
+
+      // 实体重叠通过，用编辑距离判断文本相似度
+      const editSim = this.normalizedEditDistance(content, fact.content)
+      if (editSim >= 0.5 && editSim > bestScore) {
         bestMatch = fact
-        bestScore = score
+        bestScore = editSim
       }
     }
     return bestMatch
+  }
+
+  /** 归一化编辑距离（Levenshtein），返回 0~1 的相似度 */
+  private normalizedEditDistance(a: string, b: string): number {
+    if (a === b) return 1
+    const la = a.length, lb = b.length
+    if (la === 0 || lb === 0) return 0
+    // 限制长度差过大的情况：长度差超过3倍直接判不相似
+    const maxLen = Math.max(la, lb)
+    const minLen = Math.min(la, lb)
+    if (minLen * 3 < maxLen) return 0
+
+    // 一维 DP 求编辑距离
+    const prev = new Uint16Array(minLen + 1)
+    const curr = new Uint16Array(minLen + 1)
+    for (let j = 0; j <= minLen; j++) prev[j] = j
+
+    for (let i = 1; i <= maxLen; i++) {
+      curr[0] = i
+      const ca = i <= la ? a[i - 1] : ''
+      for (let j = 1; j <= minLen; j++) {
+        const cb = j <= lb ? b[j - 1] : ''
+        const cost = ca === cb ? 0 : 1
+        curr[j] = Math.min(
+          prev[j] + 1,       // 删除
+          curr[j - 1] + 1,   // 插入
+          prev[j - 1] + cost // 替换
+        )
+      }
+      prev.set(curr)
+    }
+    return 1 - prev[minLen] / maxLen
   }
 
   /** FTS5 全文搜索 */
@@ -467,14 +523,13 @@ export class MemoryStore {
 
   /**
    * 矛盾降权：新事实添加后，查找同 category 中共享实体但内容冲突的旧事实，降低其 trust。
-   * 用于自动处理需求变更（如"用Express"改成"用Fastify"）。
+   * 用归一化编辑距离判断冲突：同实体但编辑距离低 = 矛盾/需求变更。
    * @returns 被降权的事实数量
    */
   demoteContradictingFacts(newFactId: number, newContent: string, category: FactCategory): number {
     const entities = this.getEntitiesForFact(newFactId)
     if (entities.length === 0) return 0
 
-    // 查找同 category 中共享实体的其他事实
     const entityPlaceholders = entities.map(() => '?').join(',')
     const rows = this.db.prepare(`
       SELECT DISTINCT f.fact_id, f.content
@@ -488,15 +543,12 @@ export class MemoryStore {
 
     if (rows.length === 0) return 0
 
-    const newTokens = this.tokenizeForDedup(newContent)
     let demoted = 0
-
     for (const row of rows) {
-      const oldTokens = this.tokenizeForDedup(row.content)
-      const jaccard = this.jaccardSimilarity(newTokens, oldTokens)
-      // 高实体重叠 + 低内容相似度 = 矛盾/需求变更信号
-      // Jaccard < 0.3 排除"补充性"事实（如"喜欢Python"和"也喜欢Go"）
-      if (jaccard < 0.3) {
+      const editSim = this.normalizedEditDistance(newContent, row.content)
+      // 同实体 + 编辑距离低 = 矛盾信号（如"用Express"改成"用Fastify"）
+      // 编辑距离 0.2~0.5 是矛盾区间；<0.2 完全不同；≥0.5 太相似（已在 findSimilarFact 合并）
+      if (editSim >= 0.2 && editSim < 0.5) {
         this.db.prepare(
           'UPDATE facts SET trust_score = MAX(0, trust_score - 0.10) WHERE fact_id = ?'
         ).run(row.fact_id)
@@ -531,12 +583,10 @@ export class MemoryStore {
     const alreadyDemoted = new Set<number>()
 
     for (const row of rows) {
-      const tokens1 = this.tokenizeForDedup(row.c1)
-      const tokens2 = this.tokenizeForDedup(row.c2)
-      const jaccard = this.jaccardSimilarity(tokens1, tokens2)
+      const editSim = this.normalizedEditDistance(row.c1, row.c2)
 
-      // 低内容相似度 = 可能矛盾，降权较旧的那个
-      if (jaccard < 0.3) {
+      // 同实体 + 编辑距离在矛盾区间 = 需求变更，降权较旧的那个
+      if (editSim >= 0.2 && editSim < 0.5) {
         const older = row.t1 < row.t2 ? row.id1 : row.id2
         if (!alreadyDemoted.has(older)) {
           this.db.prepare(
