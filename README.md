@@ -84,11 +84,13 @@ ocean --permission-mode auto
 **核心特性**：
 - **双层隔离** — 用户偏好全局共享，项目知识跟随项目，不串台
 - **自动提取** — 每轮对话结束，后台 fork agent 自动提取用户偏好、项目结构、技术栈等事实写入 SQLite
+- **分层自动注入** — 每轮对话前智能预取相关记忆，identity/workflow/项目概览始终注入，coding_style按技术栈匹配注入，其他记忆按相关性注入，总token占比<2%
+- **实体优先去重 + Upsert** — 实体重叠≥50%做主信号，归一化编辑距离做辅助，解决"阈值两难"问题：既不会误合并不同主题事实，也不会漏合同一事实的更新
+- **实体自动提取** — 中英文实体识别 + 自动分类（person/technology/topic），基于实体做关联检索和矛盾检测
+- **需求变更自动降权** — 同实体下内容冲突时自动降权旧事实，新需求自动覆盖旧设计
 - **FTS5 + 中文 bigram** — 写入时预分词，毫秒级本地检索，不依赖 API
-- **语义去重 + Upsert** — 实体优先（≥50% 重叠）+ 归一化编辑距离辅助，相似事实合并更新，不会无限增长
-- **实体自动提取** — 中英文实体识别 + 自动分类（person/technology/topic）
-- **信任评分** — helpful +0.05 / unhelpful -0.10，低信任事实自动降权
-- **五种高级检索** — search / probe / reason / related / contradict
+- **信任评分机制** — helpful +0.05 / unhelpful -0.10，低信任（<0.5）事实自动排除在注入之外
+- **五种高级检索** — search / probe / reason / related / contradict，支持语义搜索、实体关联、冲突检测
 
 ```bash
 /mem                    # 列出所有记忆
@@ -309,7 +311,9 @@ ocean -p "your prompt"         # 无头模式
 ### v1.5.0
 - 全局记忆分类细化：从 4 种 category 扩展到 6 种（identity / coding_style / tool_pref / workflow / project / general）
 - 分层注入策略：identity/workflow 始终注入，coding_style 按项目技术栈匹配注入，其他走 prefetch
-- 语义去重增强：实体优先（≥50% 重叠）+ 归一化编辑距离辅助，解决阈值两难问题
+- 语义去重大幅优化：实体优先（≥50% 重叠）+ 归一化编辑距离辅助，彻底解决阈值两难问题
+- 分层自动注入：每轮对话前智能预取，identity/workflow/项目概览始终注入，总token占比<2%
+- 需求变更自动检测：同实体下内容冲突时自动降权旧事实，新需求自动覆盖旧设计
 - 实体提取修复：去掉 bigram 碎片入库，新增中文声明模式提取（"我叫XXX"、"名字是XXX"）
 - 孤立实体自动清理：update/remove 事实时自动清理无关联实体
 - system prompt 引导 AI 主动操作 fact_store（"记住"时立即写入，update 时保留旧信息）
