@@ -2,9 +2,15 @@
   <img src="./static/banner.png" alt="Ocean CLI Banner" width="800">
 </p>
 
+<h1 align="center">Ocean CLI — Enhanced AI Coding Assistant</h1>
+
 <div align="center">
 
-**增强版 Claude 命令行工具 — 多模型 · 多记忆 · 多协作**
+**Multi-Model · Structured Memory · Multi-Agent Collaboration**
+
+A powerful enhanced fork of [Claude Code CLI](https://github.com/anthropics/claude-code) with structured memory, multi-model switching, multi-agent parallelism, and extensible skill system.
+
+`Claude` `GLM` `Doubao` `DeepSeek` `Gemini` `Codex` — switch with one command `/model`
 
 </div>
 
@@ -16,8 +22,12 @@
 </div>
 
 <p align="center">
-  <a href="#核心功能">功能</a> · <a href="#快速开始">快速开始</a> · <a href="#教程目录">文档</a> · <a href="#架构参考">架构</a>
+  <a href="#features">Features</a> · <a href="#quick-start">Quick Start</a> · <a href="#tutorials">Docs</a> · <a href="#architecture">Architecture</a>
 </p>
+
+---
+
+> **Keywords**: AI CLI tool, Claude Code CLI, multi-model CLI, structured memory, SQLite FTS5, multi-agent collaboration, developer productivity, terminal AI assistant, LLM tools, coding assistant, Claude Code fork, Ocean CLI, 智谱GLM, 豆包, DeepSeek, MCP protocol, Ink TUI, skill system, auto mode, bilingual assistant
 
 ---
 
