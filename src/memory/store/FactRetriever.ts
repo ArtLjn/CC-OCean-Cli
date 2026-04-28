@@ -374,7 +374,7 @@ export class FactRetriever {
     if (!this.halfLifeDays || !timestampStr) return 1.0
 
     try {
-      const ts = new Date(timestampStr + 'Z') // SQLite datetime 是 UTC
+      const ts = new Date(timestampStr) // SQLite datetime 是本地时间
       const ageMs = Date.now() - ts.getTime()
       const ageDays = ageMs / 86400000
       if (ageDays < 0) return 1.0

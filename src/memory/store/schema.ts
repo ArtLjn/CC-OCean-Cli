@@ -14,8 +14,8 @@ CREATE TABLE IF NOT EXISTS facts (
   trust_score     REAL DEFAULT 0.5,
   retrieval_count INTEGER DEFAULT 0,
   helpful_count   INTEGER DEFAULT 0,
-  created_at      TEXT DEFAULT (datetime('now')),
-  updated_at      TEXT DEFAULT (datetime('now'))
+  created_at      TEXT DEFAULT (datetime('now', 'localtime')),
+  updated_at      TEXT DEFAULT (datetime('now', 'localtime'))
 );
 
 -- 实体表
@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS entities (
   name        TEXT NOT NULL,
   entity_type TEXT DEFAULT 'unknown',
   aliases     TEXT DEFAULT '',
-  created_at  TEXT DEFAULT (datetime('now'))
+  created_at  TEXT DEFAULT (datetime('now', 'localtime'))
 );
 
 -- 事实-实体关联表
@@ -46,7 +46,7 @@ CREATE TABLE IF NOT EXISTS doc_index (
   summary     TEXT NOT NULL DEFAULT '',
   conclusions TEXT NOT NULL DEFAULT '',
   mtime_ms    INTEGER NOT NULL DEFAULT 0,
-  updated_at  TEXT DEFAULT (datetime('now'))
+  updated_at  TEXT DEFAULT (datetime('now', 'localtime'))
 );
 
 -- FTS5 全文索引（content= 绑定 facts 表）

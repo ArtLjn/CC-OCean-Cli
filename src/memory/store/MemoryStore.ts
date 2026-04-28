@@ -300,7 +300,7 @@ export class MemoryStore {
       const topN = results.slice(0, 3)
       for (const r of topN) {
         this.db.prepare(
-          `UPDATE facts SET trust_score = MIN(1.0, trust_score + ?), updated_at = datetime('now') WHERE fact_id = ?`
+          `UPDATE facts SET trust_score = MIN(1.0, trust_score + ?), updated_at = datetime('now', 'localtime') WHERE fact_id = ?`
         ).run(RETRIEVAL_TRUST_BOOST, r.factId)
       }
     }
@@ -322,7 +322,7 @@ export class MemoryStore {
       .get(factId) as (Pick<FactRow, 'fact_id' | 'trust_score'>) | null
     if (!row) return false
 
-    const assignments: string[] = ["updated_at = datetime('now')"]
+    const assignments: string[] = ["updated_at = datetime('now', 'localtime')"]
     const params: unknown[] = []
 
     if (updates.content !== undefined) {
@@ -409,7 +409,7 @@ export class MemoryStore {
 
     this.db.prepare(`
       UPDATE facts
-      SET trust_score = ?, helpful_count = helpful_count + ?, updated_at = datetime('now')
+      SET trust_score = ?, helpful_count = helpful_count + ?, updated_at = datetime('now', 'localtime')
       WHERE fact_id = ?
     `).run(newTrust, helpfulIncrement, factId)
 
@@ -609,7 +609,7 @@ export class MemoryStore {
    */
   refreshProjectFacts(): void {
     this.db.prepare(
-      `UPDATE facts SET updated_at = datetime('now') WHERE category = 'project'`
+      `UPDATE facts SET updated_at = datetime('now', 'localtime') WHERE category = 'project'`
     ).run()
   }
 
@@ -634,12 +634,12 @@ export class MemoryStore {
   upsertDocIndex(filePath: string, summary: string, conclusions: string, mtimeMs: number): void {
     this.db.prepare(`
       INSERT INTO doc_index (file_path, summary, conclusions, mtime_ms, updated_at)
-      VALUES (?, ?, ?, ?, datetime('now'))
+      VALUES (?, ?, ?, ?, datetime('now', 'localtime'))
       ON CONFLICT(file_path) DO UPDATE SET
         summary = excluded.summary,
         conclusions = excluded.conclusions,
         mtime_ms = excluded.mtime_ms,
-        updated_at = datetime('now')
+        updated_at = datetime('now', 'localtime')
     `).run(filePath, summary, conclusions, mtimeMs)
   }
 
