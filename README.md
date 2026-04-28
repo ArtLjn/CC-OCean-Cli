@@ -140,8 +140,8 @@ ocean --permission-mode auto
 | `trust_score` | REAL | 信任评分（0.0~1.0，默认 0.5） |
 | `retrieval_count` | INTEGER | 被检索次数 |
 | `helpful_count` | INTEGER | 被标记 helpful 次数 |
-| `created_at` | TEXT | 创建时间（UTC） |
-| `updated_at` | TEXT | 最后更新时间（UTC） |
+| `created_at` | TEXT | 创建时间（本地时区） |
+| `updated_at` | TEXT | 最后更新时间（本地时区） |
 
 **`entities` — 实体表**
 自动从事实内容中提取的命名实体，支持别名和类型分类。
@@ -329,6 +329,14 @@ ocean -p "your prompt"         # 无头模式
 ---
 
 ## 更新日志
+
+### v1.5.1
+- 时间戳从 UTC 改为本地时区，修复 created_at/updated_at 显示错乱（datetime('now') → datetime('now', 'localtime')）
+- 修复 retrieval_count 始终为 0：检索追踪从死代码 MemoryStore.searchFacts() 迁移到实际搜索路径 FactRetriever.search()，top3 结果额外 +0.01 信任刷新
+- system prompt 添加 fact_feedback 使用指引，引导模型主动正向强化有效事实
+- 内容检测路由从只覆盖 general 扩展到 general/workflow/coding_style，防止项目知识混入全局库
+- 内容检测路由到项目库时 category 强制覆盖为 project（不再保留 AI 错标的 general/workflow）
+- isProjectContent 新增技术调试模式匹配（测试/截图/调试 + 路由/dispatch/搜索/agent 组件名）
 
 ### v1.5.0
 - 全局记忆分类细化：从 4 种 category 扩展到 6 种（identity / coding_style / tool_pref / workflow / project / general）

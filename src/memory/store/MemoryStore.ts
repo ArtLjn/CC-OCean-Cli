@@ -21,9 +21,6 @@ const UNHELPFUL_DELTA = -0.10
 const TRUST_MIN = 0.0
 const TRUST_MAX = 1.0
 
-// 检索刷新信任提升
-const RETRIEVAL_TRUST_BOOST = 0.01
-
 // 信任衰减配置：每个 category 的宽限期和衰减速率
 const DECAY_CONFIG: Record<string, { graceDays: number; decayPerWeek: number }> = {
   identity:     { graceDays: 60, decayPerWeek: 0.02 }, // 身份信息稳定
@@ -252,60 +249,6 @@ export class MemoryStore {
       prev.set(curr)
     }
     return 1 - prev[minLen] / maxLen
-  }
-
-  /** FTS5 全文搜索 */
-  searchFacts(
-    query: string,
-    category?: FactCategory,
-    minTrust = 0.3,
-    limit = 10,
-  ): Fact[] {
-    const trimmed = query.trim()
-    if (!trimmed) return []
-
-    const params: unknown[] = [trimmed, minTrust]
-    let categoryClause = ''
-    if (category) {
-      categoryClause = 'AND f.category = ?'
-      params.push(category)
-    }
-    params.push(limit)
-
-    const sql = `
-      SELECT f.fact_id, f.content, f.category, f.tags,
-             f.trust_score, f.retrieval_count, f.helpful_count,
-             f.created_at, f.updated_at
-      FROM facts f
-      JOIN facts_fts fts ON fts.rowid = f.fact_id
-      WHERE facts_fts MATCH ?
-        AND f.trust_score >= ?
-        ${categoryClause}
-      ORDER BY fts.rank, f.trust_score DESC
-      LIMIT ?
-    `
-
-    const stmt = this.db.prepare(sql)
-    const rows = stmt.all(...params) as FactRow[]
-    const results = rows.map(r => this.rowToFact(r))
-
-    // 递增检索计数 + 主动刷新（top3 信任提升 + 时间戳重置）
-    if (results.length > 0) {
-      const ids = results.map(r => r.factId)
-      const placeholders = ids.map(() => '?').join(',')
-      this.db.prepare(
-        `UPDATE facts SET retrieval_count = retrieval_count + 1 WHERE fact_id IN (${placeholders})`
-      ).run(...ids)
-      // 检索刷新：top3 结果获得小信任提升并重置 updated_at（重置衰减时钟）
-      const topN = results.slice(0, 3)
-      for (const r of topN) {
-        this.db.prepare(
-          `UPDATE facts SET trust_score = MIN(1.0, trust_score + ?), updated_at = datetime('now', 'localtime') WHERE fact_id = ?`
-        ).run(RETRIEVAL_TRUST_BOOST, r.factId)
-      }
-    }
-
-    return results
   }
 
   /** 部分更新事实 */

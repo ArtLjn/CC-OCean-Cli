@@ -76,7 +76,14 @@ export class FactRetriever {
     }
 
     scored.sort((a, b) => b.score - a.score)
-    return scored.slice(0, limit)
+    const results = scored.slice(0, limit)
+
+    // 检索追踪：递增 retrieval_count + top3 信任刷新
+    if (results.length > 0) {
+      this.trackRetrieval(results)
+    }
+
+    return results
   }
 
   /** 实体探测：查询某实体关联的所有事实 */
@@ -470,5 +477,26 @@ export class FactRetriever {
       updatedAt: r.updated_at,
       ftsRank: 0.5,
     }))
+  }
+
+  /** 检索追踪：递增 retrieval_count + top3 信任刷新（重置衰减时钟） */
+  private trackRetrieval(facts: ScoredFact[]): void {
+    if (facts.length === 0) return
+
+    const ids = facts.map(f => f.factId)
+    const placeholders = ids.map(() => '?').join(',')
+
+    // 递增所有返回结果的检索计数
+    this.db.prepare(
+      `UPDATE facts SET retrieval_count = retrieval_count + 1 WHERE fact_id IN (${placeholders})`
+    ).run(...ids)
+
+    // top 3 信任刷新：+0.01 信任 + 重置 updated_at
+    const topN = facts.slice(0, 3)
+    for (const f of topN) {
+      this.db.prepare(
+        `UPDATE facts SET trust_score = MIN(1.0, trust_score + 0.01), updated_at = datetime('now', 'localtime') WHERE fact_id = ?`
+      ).run(f.factId)
+    }
   }
 }

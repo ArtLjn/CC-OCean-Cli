@@ -231,8 +231,10 @@ export class HolographicProvider extends MemoryProvider {
       // 至少匹配一个完整信号词
       if (lower.includes(signal)) return true
     }
-    // 额外检查：内容包含项目特有的文件路径模式（src/xxx/、项目名+实现细节关键词）
+    // 内容包含项目特有模式
     if (/项目(?:概览|架构|结构|实现|设计|代码|模块|源码)/.test(content)) return true
+    // 技术调试/测试经验：提到具体组件 + 问题模式（通常是项目级知识）
+    if (/(?:截图|调试|测试|修复|经验).{0,30}(?:路由|dispatch|搜索|agent|skill|模块|组件)/i.test(content)) return true
     return false
   }
 
@@ -244,8 +246,7 @@ export class HolographicProvider extends MemoryProvider {
    * - project → 项目库
    * - general → 内容包含项目标识则路由到项目库，否则全局库
    *
-   * category 标签保持 AI 原始标注，路由层不修改。
-   * 这样即使 AI 标错 category，存储位置也是对的。
+   * 内容检测路由到项目库时，category 强制覆盖为 project（保持存储与分类一致）。
    */
   private validateAndRoute(
     category: FactCategory,
@@ -255,9 +256,9 @@ export class HolographicProvider extends MemoryProvider {
     if (this.isProjectCategory(category) && this.projectStore) {
       return { store: this.projectStore, resolvedCategory: category }
     }
-    // general + 内容包含项目标识 → 项目库（category 保持 general）
-    if (category === 'general' && this.projectStore && this.isProjectContent(content)) {
-      return { store: this.projectStore, resolvedCategory: category }
+    // general/workflow/coding_style + 内容包含项目标识 → 项目库，category 纠正为 project
+    if (['general', 'workflow', 'coding_style'].includes(category) && this.projectStore && this.isProjectContent(content)) {
+      return { store: this.projectStore, resolvedCategory: 'project' }
     }
     // 其余全部 → 全局库
     return { store: this.globalStore!, resolvedCategory: category }
@@ -380,8 +381,9 @@ export class HolographicProvider extends MemoryProvider {
     block += '\n**写入**：当用户说"记住"、"记下来"、"以后记住"时，必须立即用 fact_store 保存。'
     block += '\n- 先 search 检查是否已有相似事实，有则 update，无则 add。'
     block += '\n- update 时必须保留旧事实中的所有有效信息，只修改变化的部分。'
-    block += '\n  例如：用户说"改名叫柳叶眉"，旧事实是"AI角色叫暖暖，身份是编程女朋友，回答风格要亲昵..."'
-    block += '\n  → update 为"AI角色叫柳叶眉，身份是编程女朋友，回答风格要亲昵..."，只改名，不丢其他信息。'
+    block += '\n  例如：用户说"改用 pnpm"，旧事实是"用 npm 管理依赖，偏好 monorepo 结构"'
+    block += '\n  → update 为"用 pnpm 管理依赖，偏好 monorepo 结构"，只改包管理器，不丢其他信息。'
+    block += '\n**反馈**：成功使用 fact_store 返回的事实时，调用 fact_feedback(action="helpful", fact_id=...) 正向强化该事实的信任评分。'
 
     // 层 1：identity 始终注入（包含 AI 角色设定和用户信息）
     const identityFacts = this.globalStore?.listFacts('identity', 0.0, 20) ?? []
