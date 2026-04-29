@@ -354,13 +354,16 @@ export class FactRetriever {
     }))
   }
 
-  /** 简单分词：空格分割 + 去标点 + 小写 */
+  /** 简单分词：空格/下划线/中英文标点分割 + 小写 */
   private tokenize(text: string): Set<string> {
     if (!text) return new Set()
     const tokens = new Set<string>()
-    for (const word of text.toLowerCase().split(/\s+/)) {
-      const cleaned = word.replace(/[.,;:!?"'(){}[\]#@<>]/g, '')
-      if (cleaned) tokens.add(cleaned)
+    // 将下划线、中文标点、连接符都视为分隔符，再按空格分词
+    const normalized = text.toLowerCase()
+      .replace(/[_\-/\\|]/g, ' ')
+      .replace(/[，。！？；：、""''【】《》（）…—·,.;:!?'"()\[\]{}<>@#$%^&*+=~`]/g, ' ')
+    for (const word of normalized.split(/\s+/)) {
+      if (word && word.length > 1) tokens.add(word)
     }
     return tokens
   }
