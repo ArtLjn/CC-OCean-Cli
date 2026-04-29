@@ -172,51 +172,75 @@ export class MemoryStore {
   }
 
   /**
-   * 实体优先去重：以实体重叠为主信号，文本相似度为辅助。
+   * 三层递进式去重。
    *
-   * 策略：
-   * 1. 提取新内容的实体 → 在同 category 中查找共享实体的已有事实
-   * 2. 对有实体重叠的候选，计算归一化编辑距离作为文本相似度
-   *    - 编辑距离 ≥ 0.5 → 合并（同主题更新，如改名字）
-   *    - 编辑距离 < 0.5 → 不合并（同实体但不同方面，如"喜欢Python"和"也喜欢Go"）
-   * 3. 无实体重叠 → 直接新增
+   * 层 1: 实体重叠 + 编辑距离（英文/有明确实体时效果最好）
+   * 层 2: Jaccard bigram 相似度（中文回退，bigram 分词不依赖实体提取）
+   * 层 3: Containment 包含率（捕捉"旧事实是新事实子集"的场景）
+   *
+   * 每层找到匹配即返回，不再尝试下一层。
    */
   findSimilarFact(content: string, category?: FactCategory): Fact | null {
     const newEntities = this.extractEntities(content).map(e => e.toLowerCase())
-    if (newEntities.length === 0) return null
-
-    const entitySet = new Set(newEntities)
-    // 不传 category 时搜索全部分类（用于去重回退）
     const existing = this.listFacts(category, 0.0, 50)
-    let bestMatch: Fact | null = null
-    let bestScore = 0
 
-    for (const fact of existing) {
-      // 获取已有事实的实体
-      const factEntityNames = (this.stmtGetEntitiesForFact.all(fact.factId) as { name: string }[])
-        .map(r => r.name.toLowerCase())
-      if (factEntityNames.length === 0) continue
+    // -- 层 1: 实体重叠 + 编辑距离（保留原逻辑，不短路） --
+    if (newEntities.length > 0) {
+      const entitySet = new Set(newEntities)
+      let bestMatch: Fact | null = null
+      let bestScore = 0
 
-      const factEntitySet = new Set(factEntityNames)
+      for (const fact of existing) {
+        const factEntityNames = (this.stmtGetEntitiesForFact.all(fact.factId) as { name: string }[])
+          .map(r => r.name.toLowerCase())
+        if (factEntityNames.length === 0) continue
 
-      // 计算实体重叠率（双向取 min，确保双方都有显著重叠）
-      let overlap = 0
-      for (const e of entitySet) { if (factEntitySet.has(e)) overlap++ }
-      const newInOld = overlap / entitySet.size       // 新事实实体被旧事实覆盖的比例
-      const oldInNew = overlap / factEntitySet.size    // 旧事实实体被新事实覆盖的比例
-      const entityScore = Math.min(newInOld, oldInNew) // 双向最小值，避免一方太稀疏
+        const factEntitySet = new Set(factEntityNames)
 
-      // 实体重叠 ≥ 50% 才考虑合并
-      if (entityScore < 0.5) continue
+        let overlap = 0
+        for (const e of entitySet) { if (factEntitySet.has(e)) overlap++ }
+        const newInOld = overlap / entitySet.size
+        const oldInNew = overlap / factEntitySet.size
+        const entityScore = Math.min(newInOld, oldInNew)
 
-      // 实体重叠通过，用编辑距离判断文本相似度
-      const editSim = this.normalizedEditDistance(content, fact.content)
-      if (editSim >= 0.5 && editSim > bestScore) {
-        bestMatch = fact
-        bestScore = editSim
+        if (entityScore < 0.5) continue
+
+        const editSim = this.normalizedEditDistance(content, fact.content)
+        if (editSim >= 0.5 && editSim > bestScore) {
+          bestMatch = fact
+          bestScore = editSim
+        }
+      }
+      if (bestMatch) return bestMatch
+    }
+
+    // -- 层 2: Jaccard bigram 相似度（中文回退） --
+    const tokens = this.tokenizeForDedup(content)
+    if (tokens.size >= 3) {
+      let bestMatch: Fact | null = null
+      let bestScore = 0
+      for (const fact of existing) {
+        const factTokens = this.tokenizeForDedup(fact.content)
+        const sim = this.jaccardSimilarity(tokens, factTokens)
+        if (sim >= 0.45 && sim > bestScore) {
+          bestMatch = fact
+          bestScore = sim
+        }
+      }
+      if (bestMatch) return bestMatch
+    }
+
+    // -- 层 3: Containment 包含率（子集检测） --
+    if (tokens.size >= 3) {
+      for (const fact of existing) {
+        const factTokens = this.tokenizeForDedup(fact.content)
+        if (this.containmentScore(tokens, factTokens) >= 0.8) {
+          return fact
+        }
       }
     }
-    return bestMatch
+
+    return null
   }
 
   /** 归一化编辑距离（Levenshtein），返回 0~1 的相似度 */
@@ -503,11 +527,20 @@ export class MemoryStore {
   }
 
   /**
-   * 启动时矛盾审计：扫描所有事实对，找到共享实体但内容冲突的，
-   * 保留较新的，降权较旧的。每次 session 启动必然执行，不依赖写入触发。
+   * 启动时矛盾审计：扫描所有事实对，找到内容冲突的，降权较旧的。
+   *
+   * 双层扫描：
+   * 1. 实体 JOIN（已有逻辑）：捕捉有明确实体重叠的矛盾
+   * 2. Jaccard 回退（新增）：捕捉中文事实等实体提取为空的矛盾
+   *
+   * 每次 session 启动必然执行，不依赖写入触发。
    * @returns { audited: number, demoted: number }
    */
   auditContradictions(): { audited: number; demoted: number } {
+    let demoted = 0
+    const alreadyDemoted = new Set<number>()
+
+    // -- 层 1: 实体 JOIN 矛盾检测（原有逻辑） --
     const rows = this.db.prepare(`
       SELECT f1.fact_id as id1, f1.content as c1, f1.updated_at as t1,
              f2.fact_id as id2, f2.content as c2, f2.updated_at as t2
@@ -523,13 +556,8 @@ export class MemoryStore {
       GROUP BY f1.fact_id, f2.fact_id
     `).all() as Array<{ id1: number; c1: string; t1: string; id2: number; c2: string; t2: string }>
 
-    let demoted = 0
-    const alreadyDemoted = new Set<number>()
-
     for (const row of rows) {
       const editSim = this.normalizedEditDistance(row.c1, row.c2)
-
-      // 同实体 + 编辑距离在矛盾区间 = 需求变更，降权较旧的那个
       if (editSim >= 0.2 && editSim < 0.5) {
         const older = row.t1 < row.t2 ? row.id1 : row.id2
         if (!alreadyDemoted.has(older)) {
@@ -538,6 +566,39 @@ export class MemoryStore {
           ).run(older)
           alreadyDemoted.add(older)
           demoted++
+        }
+      }
+    }
+
+    // -- 层 2: Jaccard 纯文本矛盾扫描（中文回退，O(n²)，事实数 ≤ 200 时执行） --
+    const allFacts = this.listFacts(undefined, 0.2, 200)
+    if (allFacts.length <= 200 && allFacts.length >= 2) {
+      for (let i = 0; i < allFacts.length; i++) {
+        const a = allFacts[i]
+        const tokensA = this.tokenizeForDedup(a.content)
+        if (tokensA.size < 3) continue
+
+        for (let j = i + 1; j < allFacts.length; j++) {
+          const b = allFacts[j]
+          // 跳过不同 category（矛盾通常在同一分类内）
+          if (a.category !== b.category) continue
+
+          const tokensB = this.tokenizeForDedup(b.content)
+          if (tokensB.size < 3) continue
+
+          const sim = this.jaccardSimilarity(tokensA, tokensB)
+          // Jaccard 0.45~0.7 视为同主题但表述有差异（矛盾区间）
+          // < 0.45 不相关；≥ 0.7 太相似（应在 findSimilarFact 中合并）
+          if (sim >= 0.45 && sim < 0.7) {
+            const older = a.updatedAt < b.updatedAt ? a.factId : b.factId
+            if (!alreadyDemoted.has(older)) {
+              this.db.prepare(
+                'UPDATE facts SET trust_score = MAX(0, trust_score - 0.10) WHERE fact_id = ?'
+              ).run(older)
+              alreadyDemoted.add(older)
+              demoted++
+            }
+          }
         }
       }
     }
@@ -606,20 +667,6 @@ export class MemoryStore {
   /** 获取数据库连接（供 FactRetriever 直接使用） */
   get connection(): Database {
     return this.db
-  }
-
-  /** 语义去重：查找 Jaccard >= 0.4 的相似事实（用于内部检查） */
-  private findSimilar(content: string, category: FactCategory): Fact | null {
-    const tokens = this.tokenizeForDedup(content)
-    if (tokens.size < 3) return null
-
-    const existing = this.listFacts(category, 0.0, 50)
-    for (const fact of existing) {
-      const factTokens = this.tokenizeForDedup(fact.content)
-      const sim = this.jaccardSimilarity(tokens, factTokens)
-      if (sim >= 0.4) return fact
-    }
-    return null
   }
 
   /** 去重用分词：英文空格分词 + 中文 bigram */
